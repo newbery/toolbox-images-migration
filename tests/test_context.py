@@ -78,14 +78,14 @@ def test_validate_config_rejects_invalid_values(tmp_path, config_for, changes, m
     cfg = config_for(tmp_path, **changes)
 
     with pytest.raises(ValueError, match=message):
-        context.validate_config(cfg)
+        context.validate_config(cfg, dry_run=False)
 
 
 def test_validate_config_allows_query_url_prefix(tmp_path, config_for):
     """Image URL prefixes with query parameters should not require a trailing slash."""
     cfg = config_for(tmp_path, new_url="https://new.example.com/?url=")
 
-    context.validate_config(cfg)
+    context.validate_config(cfg, dry_run=False)
 
 
 @pytest.mark.parametrize(
@@ -105,7 +105,31 @@ def test_validate_config_requires_complete_migration_config(tmp_path, config_for
     cfg = config_for(tmp_path, **changes)
 
     with pytest.raises(ValueError, match=f"Missing required config value: {name}"):
-        context.validate_config(cfg)
+        context.validate_config(cfg, dry_run=False)
+
+
+def test_init_context_allows_local_new_url_in_dry_run(tmp_path, monkeypatch, config_for):
+    """Dry-run context initialization should allow an existing local NEW_URL directory."""
+    new_dir = tmp_path / "new"
+    new_dir.mkdir()
+    cfg = config_for(tmp_path, new_url=str(new_dir), dry_run=True)
+    monkeypatch.setattr(context, "config", lambda: cfg)
+
+    ctx = context.init_context(models.CliArgs(mode="download_files"))
+
+    assert ctx.config.new_url == str(new_dir)
+    assert ctx.dry_run is True
+
+
+def test_init_context_rejects_local_new_url_in_apply(tmp_path, monkeypatch, config_for):
+    """Apply-mode context initialization should require NEW_URL to be an http(s) URL."""
+    new_dir = tmp_path / "new"
+    new_dir.mkdir()
+    cfg = config_for(tmp_path, new_url=str(new_dir), dry_run=True)
+    monkeypatch.setattr(context, "config", lambda: cfg)
+
+    with pytest.raises(ValueError, match=r"NEW_URL must be an absolute http\(s\) URL"):
+        context.init_context(models.CliArgs(mode="download_files", apply=True))
 
 
 def test_init_context_populates_typed_context_and_config_dry_run_false(

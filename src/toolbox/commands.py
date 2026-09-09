@@ -2,11 +2,11 @@
 Command orchestration for each CLI mode.
 """
 
+from . import io
 from .cleanup import delete_files
 from .context import Context
 from .discovery import files_from_export, files_from_posts, posts_from_api, posts_from_export
 from .download import download_files, summarize
-from .io import log
 from .updates import update_posts
 
 
@@ -34,8 +34,8 @@ def mode_download_files(context: Context) -> None:
         return
 
     # Keep results from the last 10 runs for debugging purposes
-    # rotate_output_archive(context)
-    log(context)
+    # io.rotate_output_archive(context)
+    io.log(context)
 
     # Process the data sources
     posts = posts_from_export(context)
@@ -72,8 +72,8 @@ def mode_download_links(context: Context) -> None:
         return
 
     # Keep results from the last 10 runs for debugging purposes
-    # rotate_output_archive(args)
-    log(context)
+    # io.rotate_output_archive(context)
+    io.log(context)
 
     # Process the data sources. Link-only migration does not distinguish thumbnail
     # URLs and intentionally ignores the configured recent-post cutoff.
@@ -104,7 +104,7 @@ def mode_update_posts(context: Context) -> None:
         print("Aborting")
         return
 
-    log(context)
+    io.log(context)
     update_posts(context)
 
     print("Done")
@@ -125,7 +125,7 @@ def mode_delete_files(context: Context) -> None:
         print("Aborting")
         return
 
-    log(context)
+    io.log(context)
     delete_files(context)
 
     print("Done")
@@ -149,8 +149,8 @@ def mode_update_legacy_links(context: Context) -> None:
         return
 
     # Keep results from the last 10 runs for debugging purposes
-    # rotate_output_archive(args)
-    log(context)
+    # io.rotate_output_archive(context)
+    io.log(context)
 
     # Process the data sources
     posts = posts_from_export(context, legacy=True)

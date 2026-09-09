@@ -124,7 +124,7 @@ def parse_bool(val: str | bool | None, default: bool = True) -> bool:
     raise ValueError(f"Invalid boolean value: {val!r}")
 
 
-def validate_config(config: Config) -> None:
+def validate_config(config: Config, *, dry_run: bool) -> None:
     """Validate migration configuration."""
     required = (
         "API_URL",
@@ -144,14 +144,26 @@ def validate_config(config: Config) -> None:
     if config.old_url_thumb:
         urls.append("OLD_URL_THUMB")
 
+    local_new_url = False
     for name in urls:
         value = getattr(config, name.lower())
         parsed = urlparse(value)
-        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
-            raise ValueError(f"{name} must be an absolute http(s) URL: {value!r}")
+        if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
+            continue
+        if name == "NEW_URL" and dry_run and Path(value).is_dir():
+            local_new_url = True
+            continue
+        if name == "NEW_URL" and dry_run:
+            raise ValueError(
+                f"NEW_URL must be an absolute http(s) URL or an existing local "
+                f"directory in dry-run mode: {value!r}"
+            )
+        raise ValueError(f"{name} must be an absolute http(s) URL: {value!r}")
 
     for name in ("OLD_URL", "OLD_URL_THUMB", "NEW_URL"):
         value = getattr(config, name.lower())
+        if name == "NEW_URL" and local_new_url:
+            continue
         if value and "?" not in value and not value.endswith("/"):
             raise ValueError(f"{name} must end with '/': {value!r}")
 
@@ -202,8 +214,6 @@ def paths(config: Config) -> Paths:
 def init_context(args: CliArgs) -> Context:
     """Initialize the typed runtime context."""
     cfg = config()
-    validate_config(cfg)
-    path = paths(cfg)
 
     # Precedence: explicit CLI flags > config/env (default: dry-run).
     if args.apply:
@@ -212,6 +222,9 @@ def init_context(args: CliArgs) -> Context:
         dry_run = True
     else:
         dry_run = cfg.dry_run
+
+    validate_config(cfg, dry_run=dry_run)
+    path = paths(cfg)
 
     if dry_run:
         print("---- Dry Run (no remote changes) ----")

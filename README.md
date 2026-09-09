@@ -108,7 +108,8 @@ Website Toolbox credentials and should remain untracked.
 
 Any setting can be overridden by an environment variable prefixed with
 `TOOLBOX_`. For example, `TOOLBOX_DRY_RUN=false` overrides `DRY_RUN` from the env
-files.
+files. In dry-run mode, `NEW_URL` may be an existing local directory; migrated
+image checks will use `file://` URLs instead of requiring a public image host.
 
 
 ### Authentication settings
@@ -131,7 +132,7 @@ ADMIN_COOKIE="username=aaa; wtsession=123456789abcdefghij; forumuserid=123456"
 
 ### `download_files`
 
-- checks the configured API/admin authentication;
+- checks the configured API authentication;
 - collects posts from `EXPORT_DIR/posts.csv` when available;
 - collects remaining posts through the Website Toolbox API;
 - downloads Website Toolbox-hosted images from eligible posts;

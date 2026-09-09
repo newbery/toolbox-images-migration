@@ -29,7 +29,7 @@ def test_mode_download_files_happy_path_calls_pipeline(ctx, monkeypatch):
 
     ctx.api_client = FakeApi()
     calls = []
-    monkeypatch.setattr(commands, "log", lambda args: calls.append("log"))
+    monkeypatch.setattr(commands.io, "log", lambda args: calls.append("log"))
     monkeypatch.setattr(
         commands,
         "posts_from_export",
@@ -68,7 +68,7 @@ def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ct
     skip_days = ctx.config.skip_days
     called = []
 
-    monkeypatch.setattr(commands, "log", lambda context: called.append("log"))
+    monkeypatch.setattr(commands.io, "log", lambda context: called.append("log"))
 
     def fake_export(context, *, include_thumbnails=True):
         called.append(("export", include_thumbnails))
