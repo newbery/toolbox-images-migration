@@ -3,7 +3,7 @@ Command orchestration for each CLI mode.
 """
 
 from . import io
-from .cleanup import delete_files
+from .cleanup import archive_downloads, delete_files
 from .context import Context
 from .discovery import files_from_export, files_from_posts, posts_from_api, posts_from_export
 from .download import download_files, summarize
@@ -87,14 +87,22 @@ def mode_download_links(context: Context) -> None:
     print("Done")
 
 
+def mode_archive_downloads(context: Context) -> None:
+    """Confirm downloaded images at the new host and archive local copies."""
+    io.log(context)
+    archive_downloads(context)
+
+    print("Done")
+
+
 def mode_update_posts(context: Context) -> None:
     """Process the `posts.csv` result from the last `download_*` run and update
     the posts with image links updated to point to the new image host.
 
-    This update attempts to be cautious about updates by confirming that all
-    new image urls are reachable before the update. Otherwise, we assume
-    the list of posts to update has already been filtered appropriately by
-    the logic in the `download` mode.
+    This update attempts to be cautious by requiring each destination image to
+    have either a matching local `_uploaded_` confirmation record or a successful
+    live URL check. Otherwise, we assume the list of posts to update has already
+    been filtered appropriately by the logic in the `download` mode.
     """
 
     # Confirm that we have access to api

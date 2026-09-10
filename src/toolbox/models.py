@@ -56,6 +56,7 @@ class ForumFile:
             url=row["url"],
             url_thumb=row["url_thumb"],
             url_file=row["url_file"],
+            path=row.get("path", ""),
             new_url=row["new_url"],
             result=FileResult(int(row["result"])),
         )

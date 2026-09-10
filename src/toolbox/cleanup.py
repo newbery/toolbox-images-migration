@@ -2,6 +2,7 @@
 Verify migrated URLs and remove obsolete Website Toolbox files.
 """
 
+import filecmp
 import json
 import re
 import shutil
@@ -9,12 +10,14 @@ import tempfile
 import time
 from ast import literal_eval
 from collections.abc import Iterable, Iterator
+from contextlib import suppress
 from pathlib import Path
 from urllib.parse import quote
 
 from plumbum.cmd import cut, grep
 
 from .context import Context, alive_bar
+from .download import safe_download_path
 from .io import batched, confirm, linecount, read_csv
 from .models import FileMap, FileResult, ForumFile
 from .urls import get_new_url_func
@@ -74,16 +77,48 @@ def delete_files(context: Context) -> None:
     print(f"Delete files: {count} deleted")
 
 
-def check_new_urls(context: Context, files: FileMap) -> bool:
-    """Check new urls for file/image urls referenced by the current `posts.csv`.
-    If any are inaccessible then return False.
+def _new_url_prefix(context: Context) -> str:
+    """Return the destination URL prefix used for reachability checks."""
+    new_prefix = context.config.new_url
+    if context.dry_run and not new_prefix.lower().startswith(("https://", "http://", "file://")):
+        return f"file://{Path(new_prefix).resolve()!s}/"
+    return new_prefix
 
-    This is checked before 'update_posts'.
+
+def _new_url_for_download_path(context: Context, path: str) -> str:
+    """Return the destination URL corresponding to a relative download path."""
+    old_prefix = context.config.old_url
+    thumb_prefix = context.config.old_url_thumb
+    new_url_func = get_new_url_func(old_prefix, thumb_prefix, _new_url_prefix(context))
+
+    if thumb_prefix and path.startswith("thumb/"):
+        old_url = thumb_prefix + quote(path.removeprefix("thumb/"))
+    else:
+        old_url = old_prefix + quote(path)
+    return new_url_func(old_url)
+
+
+def _uploaded_path_for_url(context: Context, file: ForumFile, url: str) -> Path | None:
+    """Return the local uploaded archive path corresponding to one source URL."""
+    if not file.path:
+        return None
+
+    path = f"thumb/{file.path}" if file.url_thumb and url == file.url_thumb else file.path
+    return safe_download_path(context.path.download_dir / "_uploaded_", path)
+
+
+def check_new_urls(context: Context, files: FileMap) -> bool:
+    """Check destination URLs referenced by the current ``posts.csv``.
+
+    A matching file in ``_uploaded_`` is treated as a record that the destination
+    URL was already confirmed by ``archive_downloads``. When no such local record
+    exists, check the destination URL directly. Return False if any required URL
+    cannot be confirmed.
     """
     dry_run = context.dry_run
     old_prefix = context.config.old_url
     thumb_prefix = context.config.old_url_thumb
-    new_prefix = context.config.new_url
+    new_prefix = _new_url_prefix(context)
     posts_path = context.path.posts
     url_ok = context.url_ok
 
@@ -95,15 +130,11 @@ def check_new_urls(context: Context, files: FileMap) -> bool:
     # Make this sleep interval an environment setting?
     sleep = 0.001 if dry_run else 0.25
 
-    # If new_url is a local path then generate a local 'file://' url.
-    # This only works in DRY_RUN since real post updates need public urls.
-    if dry_run and not new_prefix.lower().startswith(("https://", "http://")):
-        new_prefix = f"file://{Path(new_prefix).resolve()!s}/"
-
     new_url_func = get_new_url_func(old_prefix, thumb_prefix, new_prefix)
 
-    # Confirm all old urls are accessible at new location except
-    # for those files that were skipped or failed during download.
+    # Confirm all old urls are available at the new location except for files
+    # that were skipped or failed during download. Prefer the local _uploaded_
+    # archive as evidence so repeated update runs do not recheck known URLs.
     seen = set()
     images_errors = set()
     count = max(0, linecount(posts_path) - 1)
@@ -115,19 +146,23 @@ def check_new_urls(context: Context, files: FileMap) -> bool:
                 if url in seen or result in (FileResult.skipped, FileResult.error):
                     continue
                 seen.add(url)
+
+                if file is not None:
+                    uploaded_path = _uploaded_path_for_url(context, file, url)
+                    if uploaded_path is not None and uploaded_path.exists():
+                        continue
+
                 new_url = file.new_url if file and file.new_url else new_url_func(url)
                 if not url_ok(new_url):
                     images_errors.add(new_url)
                     if stop_fast:
-                        raise Exception("Image not found:", new_url)
+                        raise RuntimeError(f"Image not found: {new_url}")
                 time.sleep(sleep)
             bar()
 
     if images_errors:
-        if stop_fast:
-            raise Exception
         print("Check new urls: !!! Errors attempting to access the following images:")
-        for url in images_errors:
+        for url in sorted(images_errors):
             print(" ", url)
     else:
         print("Check new urls: Passed; All images are accessible at new urls")
@@ -135,90 +170,136 @@ def check_new_urls(context: Context, files: FileMap) -> bool:
     return not images_errors
 
 
-def check_urls_in_old_folder(context: Context) -> None:
-    """This function is just a helpful diagnostic to confirm that all images
-    in the '{context.path.download_dir}/_old_/' folder can be found in the new
-    image host location.
+def _iter_download_files(root: Path) -> Iterator[tuple[Path, str]]:
+    """Yield files below a managed download directory with relative POSIX paths."""
+    if not root.exists():
+        return
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            yield path, path.relative_to(root).as_posix()
 
-    Assumption: the relative paths under '_old_/' already match the path portion expected
-    under the new host prefix (context.config.new_url).
 
-    Any that are not found are copied to '{context.path.download_dir}/_notfound_/'
-    so they can be inspected manually.
+def _remove_empty_directories(root: Path) -> None:
+    """Remove empty child directories while retaining ``root`` itself."""
+    if not root.exists():
+        return
+    directories = [path for path in root.rglob("*") if path.is_dir()]
+    for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+        with suppress(OSError):
+            path.rmdir()
+
+
+def archive_downloads(context: Context) -> None:
+    """Confirm newly uploaded images at the destination and archive local copies.
+
+    Each file in ``_new_`` is checked independently. A confirmed file is moved to
+    the same relative path under ``_uploaded_``. Missing URLs and local destination
+    conflicts remain in ``_new_`` and are listed when the operation completes.
     """
     download_dir = Path(context.path.download_dir)
-    old_dir = download_dir / "_old_"
+    new_dir = download_dir / "_new_"
+    uploaded_dir = download_dir / "_uploaded_"
+    url_ok = context.url_ok
+
+    files = list(_iter_download_files(new_dir))
+    if not files:
+        print(f"Archive downloads: No files under {new_dir}")
+        return
+
+    archived = 0
+    missing: list[tuple[str, str]] = []
+    conflicts: list[str] = []
+    sleep = 0.001 if context.dry_run else 0.25
+
+    with alive_bar(len(files), title="Archive downloads") as bar:
+        for src_path, rel in files:
+            new_url = _new_url_for_download_path(context, rel)
+            if not url_ok(new_url):
+                missing.append((rel, new_url))
+                bar()
+                time.sleep(sleep)
+                continue
+
+            dst_path = safe_download_path(uploaded_dir, rel)
+            if dst_path.exists():
+                if filecmp.cmp(src_path, dst_path, shallow=False):
+                    src_path.unlink()
+                    archived += 1
+                else:
+                    conflicts.append(rel)
+            else:
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(src_path, dst_path)
+                archived += 1
+
+            bar()
+            time.sleep(sleep)
+
+    _remove_empty_directories(new_dir)
+    remaining = [rel for _, rel in _iter_download_files(new_dir)]
+
+    print(f"Archive downloads: {archived} archived; {len(remaining)} remaining in {new_dir}")
+
+    if missing:
+        print("Not found at new host:")
+        for rel, url in missing:
+            print(f"  {rel}: {url}")
+
+    if conflicts:
+        print("Conflicts with existing files in _uploaded_:")
+        for rel in conflicts:
+            print(" ", rel)
+
+    if remaining:
+        print("Files remaining in _new_:")
+        for rel in remaining:
+            print(" ", rel)
+
+
+def check_urls_in_uploaded_folder(context: Context) -> None:
+    """Confirm that archived uploads can still be found at the new image host.
+
+    The relative paths under ``_uploaded_`` are expected to match the destination
+    host paths. Missing files are copied to ``_notfound_`` for manual inspection.
+    """
+    download_dir = Path(context.path.download_dir)
+    uploaded_dir = download_dir / "_uploaded_"
     notfound_dir = download_dir / "_notfound_"
     url_ok = context.url_ok
 
-    if not old_dir.exists():
-        print(f"Check urls in old folder: '{old_dir}' not found; nothing to do")
-        return
-
-    # The proxy we're using throttles at 2500 req per 10 min.
-    # Make this sleep interval an environment setting?
-    sleep = 0.25
-
-    # Normalize new_url prefix
-    new_prefix = str(context.config.new_url)
-    if not new_prefix.endswith("/"):
-        new_prefix += "/"
-
-    def double_quote(path: str) -> str:
-        return quote(quote(path))
-
-    # If new_prefix is a proxy URL with query params, filenames may need
-    # to be quoted twice to protect special characters through the proxy.
-    fixpath = double_quote if "?" in new_prefix else (lambda x: x)
-
-    def iter_old_files() -> Iterator[tuple[Path, str]]:
-        for p in old_dir.rglob("*"):
-            if not p.is_file():
-                continue
-            rel = p.relative_to(old_dir).as_posix()
-
-            # Skip hidden/housekeeping paths under _old_
-            if rel.startswith(".") or "/." in rel:
-                continue
-            if rel.split("/", 1)[0].startswith("_"):
-                continue
-
-            yield p, rel
-
-    # Pre-count without holding all paths in memory
-    total = sum(1 for _ in iter_old_files())
-    if total == 0:
-        print(f"Check urls in old folder: No files under {old_dir}")
+    files = list(_iter_download_files(uploaded_dir))
+    if not files:
+        print(f"Check urls in uploaded folder: No files under {uploaded_dir}")
         return
 
     missing = 0
-    checked = 0
     first_few_missing: list[str] = []
 
-    with alive_bar(total, title="Check old downloads at new host") as bar:
-        for src_path, rel in iter_old_files():
-            new_url = new_prefix + fixpath(rel)
-            checked += 1
-
+    with alive_bar(len(files), title="Check uploaded downloads at new host") as bar:
+        for src_path, rel in files:
+            new_url = _new_url_for_download_path(context, rel)
             if not url_ok(new_url):
                 missing += 1
-                dst = notfound_dir / rel
+                dst = safe_download_path(notfound_dir, rel)
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src_path, dst)
                 if len(first_few_missing) < 20:
                     first_few_missing.append(new_url)
 
-            time.sleep(sleep)
+            time.sleep(0.001 if context.dry_run else 0.25)
             bar()
 
+    checked = len(files)
     if missing:
-        print(f"Check urls in old folder: {missing}/{checked} missing; copied to: {notfound_dir}")
+        print(
+            f"Check urls in uploaded folder: {missing}/{checked} missing; copied to: {notfound_dir}"
+        )
         if first_few_missing:
             print("First missing urls:")
             for url in first_few_missing:
                 print(" ", url)
     else:
-        print(f"Check urls in old folder: Passed; {checked} files found at new host")
+        print(f"Check urls in uploaded folder: Passed; {checked} files found at new host")
 
 
 def grep_urls_in_file(updates_path: Path, urls: list[str]) -> str:

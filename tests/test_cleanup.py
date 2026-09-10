@@ -182,3 +182,128 @@ def test_delete_files_batches_and_calls_client(ctx, monkeypatch):
     assert len(calls[0]) == 100
     assert len(calls[1]) == 100
     assert len(calls[2]) == 4
+
+
+def test_check_new_urls_trusts_uploaded_archive_and_falls_back_to_remote(
+    ctx, monkeypatch, write_csv
+):
+    """Archived files skip HTTP checks while unarchived files still use the destination URL."""
+    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    uploaded = ctx.path.download_dir / "_uploaded_" / "123" / "a.jpg"
+    uploaded.parent.mkdir(parents=True)
+    uploaded.write_bytes(b"confirmed")
+
+    urls = [
+        "https://old.example.com/123/a.jpg",
+        "https://old.example.com/456/b.jpg",
+    ]
+    write_csv(
+        ctx.path.posts,
+        ["pid", "date", "image_urls", "message"],
+        [["1", "0", repr(urls), "x"]],
+    )
+    downloaded = models.FileResult.downloaded
+    files = {
+        urls[0]: models.ForumFile(fileid="123", url=urls[0], path="123/a.jpg", result=downloaded),
+        urls[1]: models.ForumFile(fileid="456", url=urls[1], path="456/b.jpg", result=downloaded),
+    }
+    checked = []
+    ctx.url_ok = lambda url: checked.append(url) or True
+
+    assert cleanup.check_new_urls(ctx, files) is True
+    assert checked == ["https://new.example.com/456/b.jpg"]
+
+
+def test_check_new_urls_uses_uploaded_thumbnail_path(ctx, monkeypatch, write_csv):
+    """Thumbnail confirmation records live below ``_uploaded_/thumb``."""
+    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    url = "https://old.example.com/123/a.jpg"
+    url_thumb = "https://old.example.com/thumb/123/a.jpg"
+    uploaded = ctx.path.download_dir / "_uploaded_" / "thumb" / "123" / "a.jpg"
+    uploaded.parent.mkdir(parents=True)
+    uploaded.write_bytes(b"confirmed")
+
+    write_csv(
+        ctx.path.posts,
+        ["pid", "date", "image_urls", "message"],
+        [["1", "0", repr([url_thumb]), "x"]],
+    )
+
+    downloaded = models.FileResult.downloaded
+    file = models.ForumFile(
+        fileid="123", url=url, url_thumb=url_thumb, path="123/a.jpg", result=downloaded
+    )
+    ctx.url_ok = lambda _url: (_ for _ in ()).throw(
+        AssertionError("archived thumbnail should not be checked remotely")
+    )
+
+    assert cleanup.check_new_urls(ctx, {url_thumb: file}) is True
+
+
+def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch, capsys):
+    """Archive only files found at the destination, leaving and listing failures."""
+    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    new_dir = ctx.path.download_dir / "_new_"
+    good = new_dir / "123" / "Brother 160 Cambridge.jpg"
+    thumb = new_dir / "thumb" / "123" / "Brother 160 Cambridge.jpg"
+    missing = new_dir / "456" / "missing.jpg"
+    for path, data in ((good, b"good"), (thumb, b"thumb"), (missing, b"missing")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    checked = []
+
+    def url_ok(url):
+        checked.append(url)
+        return not url.endswith("456/missing.jpg")
+
+    ctx.url_ok = url_ok
+    cleanup.archive_downloads(ctx)
+
+    uploaded_dir = ctx.path.download_dir / "_uploaded_"
+    assert (uploaded_dir / "123" / good.name).read_bytes() == b"good"
+    assert (uploaded_dir / "thumb" / "123" / thumb.name).read_bytes() == b"thumb"
+    assert missing.exists()
+    assert not good.exists()
+    assert not thumb.exists()
+    assert checked == [
+        "https://new.example.com/123/Brother%20160%20Cambridge.jpg",
+        "https://new.example.com/456/missing.jpg",
+        "https://new.example.com/thumb/123/Brother%20160%20Cambridge.jpg",
+    ]
+
+    out = capsys.readouterr().out
+    assert "2 archived; 1 remaining" in out
+    assert "456/missing.jpg" in out
+    assert "https://new.example.com/456/missing.jpg" in out
+
+
+def test_archive_downloads_handles_existing_uploaded_files(ctx, monkeypatch, capsys):
+    """Identical duplicates are consumed, while differing destination files remain conflicts."""
+    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    new_dir = ctx.path.download_dir / "_new_"
+    uploaded_dir = ctx.path.download_dir / "_uploaded_"
+
+    same_new = new_dir / "123" / "same.jpg"
+    same_uploaded = uploaded_dir / "123" / "same.jpg"
+    conflict_new = new_dir / "456" / "conflict.jpg"
+    conflict_uploaded = uploaded_dir / "456" / "conflict.jpg"
+    for path, data in (
+        (same_new, b"same"),
+        (same_uploaded, b"same"),
+        (conflict_new, b"new"),
+        (conflict_uploaded, b"old"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    ctx.url_ok = lambda _url: True
+    cleanup.archive_downloads(ctx)
+
+    assert not same_new.exists()
+    assert same_uploaded.read_bytes() == b"same"
+    assert conflict_new.read_bytes() == b"new"
+    assert conflict_uploaded.read_bytes() == b"old"
+    out = capsys.readouterr().out
+    assert "456/conflict.jpg" in out
+    assert "Conflicts with existing files in _uploaded_" in out

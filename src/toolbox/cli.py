@@ -9,8 +9,9 @@ from functools import cache
 
 import requests
 
-from .cleanup import check_urls_in_old_folder
+from .cleanup import check_urls_in_uploaded_folder
 from .commands import (
+    mode_archive_downloads,
     mode_delete_files,
     mode_download_files,
     mode_download_links,
@@ -40,10 +41,11 @@ def modes() -> dict[str, Callable[[Context], None]]:
     return {
         "download_files": mode_download_files,
         "download_links": mode_download_links,
+        "archive_downloads": mode_archive_downloads,
         "update_posts": mode_update_posts,
         "delete_files": mode_delete_files,
         "update_legacy_links": mode_update_legacy_links,
-        "check_urls_in_old_folder": check_urls_in_old_folder,
+        "check_urls_in_uploaded_folder": check_urls_in_uploaded_folder,
     }
 
 

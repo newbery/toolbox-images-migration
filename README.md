@@ -62,12 +62,18 @@ toolbox download_files
 # 7. Run the complete download phase when ready.
 toolbox --apply download_files
 
-# 8. Manually copy the downloaded images to the new image host.
+# 8. Manually copy the contents of DOWNLOAD_DIR/_new_/ to the new image host,
+#    preserving the directory structure.
 
-# 9. Verify the new URLs and update the forum posts.
+# 9. Confirm the uploaded URLs and archive each confirmed local file under
+#    DOWNLOAD_DIR/_uploaded_/. Files that cannot be confirmed remain in _new_.
+toolbox archive_downloads
+
+# 10. Update the forum posts. Files recorded in _uploaded_ do not need another
+#     destination URL check; missing local records fall back to a live URL check.
 toolbox --apply update_posts
 
-# 10. Delete the successfully migrated images from Website Toolbox storage.
+# 11. Delete the successfully migrated images from Website Toolbox storage.
 toolbox --apply delete_files
 ```
 
@@ -135,13 +141,36 @@ ADMIN_COOKIE="username=aaa; wtsession=123456789abcdefghij; forumuserid=123456"
 - checks the configured API authentication;
 - collects posts from `EXPORT_DIR/posts.csv` when available;
 - collects remaining posts through the Website Toolbox API;
-- downloads Website Toolbox-hosted images from eligible posts;
+- downloads Website Toolbox-hosted images from eligible posts into
+  `DOWNLOAD_DIR/_new_/`;
+- reuses matching files already recorded under `DOWNLOAD_DIR/_uploaded_/` rather
+  than downloading them again;
 - writes the resulting image/file data and the post-update inputs.
+
+
+### `archive_downloads`
+
+- checks every file under `DOWNLOAD_DIR/_new_/` at its expected URL on the new
+  image host;
+- moves each confirmed file to the same relative path under
+  `DOWNLOAD_DIR/_uploaded_/`;
+- leaves unconfirmed files or local archive conflicts in `_new_`;
+- lists any files remaining in `_new_` when the operation completes.
+
+The `_uploaded_` directory is therefore the local record that an image was
+confirmed on the destination host. The archive operation is safe to rerun. If an
+identical destination file already exists in `_uploaded_`, the duplicate in
+`_new_` is removed; if the files differ, the new copy is left in place and
+reported as a conflict.
 
 
 ### `update_posts`
 
-- checks that the migrated image URLs are reachable at the new host;
+- treats a matching file in `_uploaded_` as prior confirmation that the migrated
+  image URL exists;
+- checks the actual destination URL as a fallback when there is no matching local
+  `_uploaded_` record, including when using an older `files.csv` that lacks the
+  newer `path` field;
 - builds/uses the update plan;
 - updates eligible post messages with the new image URLs in apply mode.
 

@@ -108,7 +108,8 @@ def test_summarize_writes_posts_and_files(ctx, write_csv):
     assert [r["pid"] for r in posts_out] == ["2", "3"]
 
     files_out = list(io.read_csv(ctx.path.files))
-    assert any(r["fileid"] == "123" for r in files_out)
+    row = next(r for r in files_out if r["fileid"] == "123")
+    assert row["path"] == "123/a.jpg"
 
 
 def test_download_files_does_not_count_file_when_thumbnail_fails(ctx, capsys):
@@ -163,3 +164,24 @@ def test_download_files_rejects_path_outside_download_directory(ctx):
 
     with pytest.raises(ValueError, match="Unsafe download path outside"):
         download.download_files(ctx, files)
+
+
+def test_download_files_uses_uploaded_archive_as_cache(ctx):
+    """Previously confirmed uploads should not be downloaded again."""
+    uploaded = ctx.path.download_dir / "_uploaded_" / "123" / "a.jpg"
+    uploaded.parent.mkdir(parents=True)
+    uploaded.write_bytes(b"already uploaded")
+
+    class FakeDownloader:
+        def download(self, _url, _path_new):
+            raise AssertionError("uploaded files should not be downloaded again")
+
+    ctx.downloader = FakeDownloader()
+    url = "https://old.example.com/123/a.jpg"
+    files = {
+        "123": models.ForumFile(fileid="123", url=url, path="123/a.jpg", pids={"1"})
+    }
+
+    out = download.download_files(ctx, files)
+
+    assert out["123"].result is models.FileResult.downloaded

@@ -170,3 +170,14 @@ def test_mode_update_legacy_links_calls_expected(ctx, monkeypatch):
         ("summarize", True),
         ("update_posts", True),
     ]
+
+
+def test_mode_archive_downloads_logs_and_archives(ctx, monkeypatch):
+    """The archive mode should log the run and invoke local upload confirmation."""
+    calls = []
+    monkeypatch.setattr(commands.io, "log", lambda context: calls.append("log"))
+    monkeypatch.setattr(commands, "archive_downloads", lambda context: calls.append("archive"))
+
+    commands.mode_archive_downloads(ctx)
+
+    assert calls == ["log", "archive"]

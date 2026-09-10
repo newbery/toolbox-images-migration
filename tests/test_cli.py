@@ -68,3 +68,15 @@ def test_main_parses_initializes_and_dispatches_mode(monkeypatch):
     monkeypatch.setattr(cli, "modes", lambda: {"download_files": mode_fn})
     cli.main(["download_files"])
     assert called == {"parse": 1, "ctx": 1, "init": 1, "mode": 1}
+
+
+def test_modes_include_archive_and_uploaded_diagnostic():
+    """The CLI exposes the new archive workflow and renamed uploaded diagnostic."""
+    cli.modes.cache_clear()
+    try:
+        available = cli.modes()
+        assert "archive_downloads" in available
+        assert "check_urls_in_uploaded_folder" in available
+        assert "check_urls_in_old_folder" not in available
+    finally:
+        cli.modes.cache_clear()

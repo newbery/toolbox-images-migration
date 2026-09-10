@@ -12,7 +12,7 @@ from .io import friendly_size, read_csv
 from .models import FileMap, FileResult
 
 
-def _safe_download_path(root: Path, path: str) -> Path:
+def safe_download_path(root: Path, path: str) -> Path:
     """Join a relative download path to `root` without allowing it to escape."""
     root = root.resolve()
     target = (root / path).resolve()
@@ -28,11 +28,11 @@ def download_files(context: Context, files: FileMap) -> FileMap:
 
     def download_file(url: str, path: str) -> int:
         """Download a single file"""
-        path_old = _safe_download_path(download_dir / "_old_", path)
-        path_new = _safe_download_path(download_dir / "_new_", path)
+        path_uploaded = safe_download_path(download_dir / "_uploaded_", path)
+        path_new = safe_download_path(download_dir / "_new_", path)
 
-        if path_old.exists():
-            size = path_old.stat().st_size
+        if path_uploaded.exists():
+            size = path_uploaded.stat().st_size
         elif path_new.exists():
             size = path_new.stat().st_size
         else:
@@ -126,9 +126,9 @@ def summarize(context: Context, files: FileMap, legacy: bool = False) -> None:
     with alive_bar(title="Summarize") as bar:
         # Generate final `posts.csv` containing posts to be updated.
         with posts_output_path.open("w", newline="") as f:
-            fieldnames = ["pid", "date", "image_urls", "message"]
+            names = ["pid", "date", "image_urls", "message"]
             posts_output = csv.writer(f)
-            posts_output.writerow(fieldnames)
+            posts_output.writerow(names)
 
             if legacy:
                 posts_data = read_csv(from_export_path)
@@ -149,17 +149,19 @@ def summarize(context: Context, files: FileMap, legacy: bool = False) -> None:
         # Generate `files.csv` with final data about all files found.
         # This includes skipped files since it's useful for diagnosis.
         with files_output_path.open("w", newline="") as f:
-            fieldnames = ["fileid", "pids", "url", "url_thumb", "url_file", "new_url", "result"]
+            names = ["fileid", "pids", "url", "url_thumb", "url_file", "path", "new_url", "result"]
             files_output = csv.writer(f)
-            files_output.writerow(fieldnames)
+            files_output.writerow(names)
             for fileid, file in files.items():
                 pids = file.pids
                 url = file.url
                 url_thumb = file.url_thumb
                 url_file = file.url_file
+                path = file.path
                 new_url = file.new_url  # for legacy link updates
                 result = file.result.value
-                files_output.writerow([fileid, pids, url, url_thumb, url_file, new_url, result])
+                row = [fileid, pids, url, url_thumb, url_file, path, new_url, result]
+                files_output.writerow(row)
                 bar()
 
     print(f"Summarize: {postcount} posts and {filecount} files/images")
