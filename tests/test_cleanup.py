@@ -242,6 +242,7 @@ def test_check_new_urls_uses_uploaded_thumbnail_path(ctx, monkeypatch, write_csv
 
 def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch, capsys):
     """Archive only files found at the destination, leaving and listing failures."""
+    ctx.dry_run = False
     monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     new_dir = ctx.path.download_dir / "_new_"
     good = new_dir / "123" / "Brother 160 Cambridge.jpg"
@@ -280,6 +281,7 @@ def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch,
 
 def test_archive_downloads_handles_existing_uploaded_files(ctx, monkeypatch, capsys):
     """Identical duplicates are consumed, while differing destination files remain conflicts."""
+    ctx.dry_run = False
     monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     new_dir = ctx.path.download_dir / "_new_"
     uploaded_dir = ctx.path.download_dir / "_uploaded_"
@@ -307,3 +309,59 @@ def test_archive_downloads_handles_existing_uploaded_files(ctx, monkeypatch, cap
     out = capsys.readouterr().out
     assert "456/conflict.jpg" in out
     assert "Conflicts with existing files in _uploaded_" in out
+
+
+def test_archive_downloads_dry_run_does_not_change_local_files(ctx, monkeypatch, capsys):
+    """Dry-run should validate uploads but leave archive state and metadata untouched."""
+    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    new_dir = ctx.path.download_dir / "_new_"
+    image = new_dir / "123" / "a.jpg"
+    metadata = new_dir / "123" / ".DS_Store"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"image")
+    metadata.write_bytes(b"finder")
+
+    checked = []
+    ctx.url_ok = lambda url: checked.append(url) or True
+
+    cleanup.archive_downloads(ctx)
+
+    assert image.read_bytes() == b"image"
+    assert metadata.read_bytes() == b"finder"
+
+    assert not (ctx.path.download_dir / "_uploaded_" / "123" / "a.jpg").exists()
+    assert checked == ["https://new.example.com/123/a.jpg"]
+
+    out = capsys.readouterr().out
+    assert "Dry run; no local files will be moved or deleted" in out
+    assert "1 would archive; 0 would remain" in out
+
+
+def test_archive_downloads_removes_ds_store_and_empty_directories(ctx, monkeypatch, capsys):
+    """Apply mode should ignore Finder metadata and prune directories emptied by archiving."""
+    ctx.dry_run = False
+    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    new_dir = ctx.path.download_dir / "_new_"
+    image = new_dir / "123" / "nested" / "a.jpg"
+    metadata = image.parent / ".DS_Store"
+    metadata_only = new_dir / "empty" / "nested" / ".DS_Store"
+    image.parent.mkdir(parents=True)
+    metadata_only.parent.mkdir(parents=True)
+    image.write_bytes(b"image")
+    metadata.write_bytes(b"finder")
+    metadata_only.write_bytes(b"finder")
+
+    checked = []
+    ctx.url_ok = lambda url: checked.append(url) or True
+
+    cleanup.archive_downloads(ctx)
+
+    uploaded = ctx.path.download_dir / "_uploaded_" / "123" / "nested" / "a.jpg"
+    assert uploaded.read_bytes() == b"image"
+    assert not (new_dir / "123").exists()
+    assert not (new_dir / "empty").exists()
+    assert new_dir.exists()
+    assert checked == ["https://new.example.com/123/nested/a.jpg"]
+
+    out = capsys.readouterr().out
+    assert "1 archived; 0 remaining" in out

@@ -67,7 +67,7 @@ toolbox --apply download_files
 
 # 9. Confirm the uploaded URLs and archive each confirmed local file under
 #    DOWNLOAD_DIR/_uploaded_/. Files that cannot be confirmed remain in _new_.
-toolbox archive_downloads
+toolbox --apply archive_downloads
 
 # 10. Update the forum posts. Files recorded in _uploaded_ do not need another
 #     destination URL check; missing local records fall back to a live URL check.
@@ -83,8 +83,9 @@ Run `toolbox --help` for the complete list of modes and safety flags.
 ## Safety model
 
 Dry-run is the default. Unless explicitly overridden, the utility prevents
-remote updates and deletes and limits some collection/download operations to
-make test runs manageable.
+migration mutations, including local archive moves/deletes and remote
+updates/deletes, and limits some collection/download operations to make test
+runs manageable.
 
 Use `--apply` to perform a full migration operation. Use `--dry-run` to force the
 safe mode even if configuration says otherwise. Destructive operations also have
@@ -150,12 +151,15 @@ ADMIN_COOKIE="username=aaa; wtsession=123456789abcdefghij; forumuserid=123456"
 
 ### `archive_downloads`
 
-- checks every file under `DOWNLOAD_DIR/_new_/` at its expected URL on the new
+- checks every image under `DOWNLOAD_DIR/_new_/` at its expected URL on the new
   image host;
-- moves each confirmed file to the same relative path under
+- in dry-run mode, reports what would be archived without changing local files;
+- with `--apply`, moves each confirmed file to the same relative path under
   `DOWNLOAD_DIR/_uploaded_/`;
+- ignores `.DS_Store` files during URL checks and removes them with `--apply`;
+- removes empty directories left under `_new_` after confirmed files are archived;
 - leaves unconfirmed files or local archive conflicts in `_new_`;
-- lists any files remaining in `_new_` when the operation completes.
+- lists any image files remaining in `_new_` when the operation completes.
 
 The `_uploaded_` directory is therefore the local record that an image was
 confirmed on the destination host. The archive operation is safe to rerun. If an

@@ -171,12 +171,21 @@ def check_new_urls(context: Context, files: FileMap) -> bool:
 
 
 def _iter_download_files(root: Path) -> Iterator[tuple[Path, str]]:
-    """Yield files below a managed download directory with relative POSIX paths."""
+    """Yield managed files below a download directory with relative POSIX paths."""
     if not root.exists():
         return
     for path in sorted(root.rglob("*")):
-        if path.is_file():
+        if path.is_file() and path.name != ".DS_Store":
             yield path, path.relative_to(root).as_posix()
+
+
+def _remove_ds_store_files(root: Path) -> None:
+    """Remove macOS Finder metadata below `root`."""
+    if not root.exists():
+        return
+    for path in root.rglob(".DS_Store"):
+        if path.is_file():
+            path.unlink()
 
 
 def _remove_empty_directories(root: Path) -> None:
@@ -192,24 +201,30 @@ def _remove_empty_directories(root: Path) -> None:
 def archive_downloads(context: Context) -> None:
     """Confirm newly uploaded images at the destination and archive local copies.
 
-    Each file in ``_new_`` is checked independently. A confirmed file is moved to
-    the same relative path under ``_uploaded_``. Missing URLs and local destination
-    conflicts remain in ``_new_`` and are listed when the operation completes.
+    Each file in `_new_` is checked independently. A confirmed file is moved to
+    the same relative path under `_uploaded_` only in apply mode. Missing URLs
+    and local destination conflicts remain in `_new_` and are listed when the
+    operation completes. Finder `.DS_Store` files are ignored for URL checks
+    and removed in apply mode.
     """
+    dry_run = context.dry_run
     download_dir = Path(context.path.download_dir)
     new_dir = download_dir / "_new_"
     uploaded_dir = download_dir / "_uploaded_"
     url_ok = context.url_ok
 
+    if dry_run:
+        print("Archive downloads: Dry run; no local files will be moved or deleted")
+
     files = list(_iter_download_files(new_dir))
     if not files:
-        print(f"Archive downloads: No files under {new_dir}")
+        print(f"Archive downloads: No image files under {new_dir}")
         return
 
     archived = 0
     missing: list[tuple[str, str]] = []
     conflicts: list[str] = []
-    sleep = 0.001 if context.dry_run else 0.25
+    sleep = 0.001 if dry_run else 0.25
 
     with alive_bar(len(files), title="Archive downloads") as bar:
         for src_path, rel in files:
@@ -223,22 +238,28 @@ def archive_downloads(context: Context) -> None:
             dst_path = safe_download_path(uploaded_dir, rel)
             if dst_path.exists():
                 if filecmp.cmp(src_path, dst_path, shallow=False):
-                    src_path.unlink()
+                    if not dry_run:
+                        src_path.unlink()
                     archived += 1
                 else:
                     conflicts.append(rel)
             else:
-                dst_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(src_path, dst_path)
+                if not dry_run:
+                    dst_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(src_path, dst_path)
                 archived += 1
 
             bar()
             time.sleep(sleep)
 
-    _remove_empty_directories(new_dir)
-    remaining = [rel for _, rel in _iter_download_files(new_dir)]
+    if dry_run:
+        remaining = sorted({rel for rel, _url in missing} | set(conflicts))
+    else:
+        remaining = [rel for _, rel in _iter_download_files(new_dir)]
 
-    print(f"Archive downloads: {archived} archived; {len(remaining)} remaining in {new_dir}")
+    action = "would archive" if dry_run else "archived"
+    remainder = "would remain" if dry_run else "remaining"
+    print(f"Archive downloads: {archived} {action}; {len(remaining)} {remainder} in {new_dir}")
 
     if missing:
         print("Not found at new host:")
@@ -251,9 +272,17 @@ def archive_downloads(context: Context) -> None:
             print(" ", rel)
 
     if remaining:
-        print("Files remaining in _new_:")
+        if dry_run:
+            heading = "Files that would remain in _new_:"
+        else:
+            heading = "Files remaining in _new_:"
+        print(heading)
         for rel in remaining:
             print(" ", rel)
+
+    if not dry_run:
+        _remove_ds_store_files(new_dir)
+        _remove_empty_directories(new_dir)
 
 
 def check_urls_in_uploaded_folder(context: Context) -> None:

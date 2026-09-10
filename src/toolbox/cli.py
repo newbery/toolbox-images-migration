@@ -79,7 +79,7 @@ def parse_args(argv: list[str]) -> CliArgs:
     group.add_argument(
         "--apply",
         action="store_true",
-        help="Actually perform remote updates/deletes. Without this, the script runs in dry-run mode.",
+        help="Actually perform migration changes. Without this, the script runs in dry-run mode.",
     )
     group.add_argument(
         "--dry-run",

@@ -178,9 +178,7 @@ def test_download_files_uses_uploaded_archive_as_cache(ctx):
 
     ctx.downloader = FakeDownloader()
     url = "https://old.example.com/123/a.jpg"
-    files = {
-        "123": models.ForumFile(fileid="123", url=url, path="123/a.jpg", pids={"1"})
-    }
+    files = {"123": models.ForumFile(fileid="123", url=url, path="123/a.jpg", pids={"1"})}
 
     out = download.download_files(ctx, files)
 
