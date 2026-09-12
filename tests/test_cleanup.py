@@ -5,8 +5,8 @@ from toolbox import cleanup, models
 
 
 def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch, capsys):
-    """The `archive_downloads` function must archive confirmed files and report destination
-    failures.
+    """The `archive_downloads` function must archive confirmed files and
+    report destination failures.
     """
     ctx.dry_run = False
     monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
@@ -46,8 +46,8 @@ def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch,
 
 
 def test_archive_downloads_handles_existing_uploaded_files(ctx, monkeypatch, capsys):
-    """The `archive_downloads` function must consume identical archived duplicates and preserve
-    conflicts.
+    """The `archive_downloads` function must consume identical archived
+    duplicates and preserve conflicts.
     """
     ctx.dry_run = False
     monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
@@ -80,7 +80,9 @@ def test_archive_downloads_handles_existing_uploaded_files(ctx, monkeypatch, cap
 
 
 def test_archive_downloads_dry_run_does_not_change_local_files(ctx, monkeypatch, capsys):
-    """The `archive_downloads` function must not modify local files or metadata during a dry run."""
+    """The `archive_downloads` function must not modify local files or metadata
+    during a dry run.
+    """
     monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     new_dir = ctx.path.download_dir / "_new_"
     image = new_dir / "123" / "a.jpg"
@@ -138,8 +140,8 @@ def test_archive_downloads_removes_ds_store_and_empty_directories(ctx, monkeypat
 
 
 def test_check_new_urls_skips_skipped_files_and_uses_local_file_url(ctx, tmp_path, monkeypatch):
-    """The `check_new_urls` function must ignore skipped files and check local destinations via
-    file:// URLs.
+    """The `check_new_urls` function must ignore skipped files and check
+    local destinations via file:// URLs.
     """
     # Use local directory as "new_url" and dry-run=True to enable file:// prefix
     new_root = tmp_path / "new"
@@ -151,9 +153,7 @@ def test_check_new_urls_skips_skipped_files_and_uses_local_file_url(ctx, tmp_pat
     write_csv(
         ctx.path.posts,
         ["pid", "date", "image_urls", "message"],
-        [
-            ["1", "0", "['https://old.example.com/1.jpg', 'https://old.example.com/2.jpg']", "x"],
-        ],
+        [["1", "0", "['https://old.example.com/1.jpg', 'https://old.example.com/2.jpg']", "x"]],
     )
     files = {
         "https://old.example.com/1.jpg": models.ForumFile(
@@ -179,8 +179,8 @@ def test_check_new_urls_skips_skipped_files_and_uses_local_file_url(ctx, tmp_pat
 
 
 def test_check_new_urls_trusts_uploaded_archive_and_falls_back_to_remote(ctx, monkeypatch):
-    """The `check_new_urls` function must trust archived files and check unarchived destination
-    URLs.
+    """The `check_new_urls` function must trust archived files and check
+    unarchived destination URLs.
     """
     monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     uploaded = ctx.path.download_dir / "_uploaded_" / "123" / "a.jpg"
@@ -209,8 +209,8 @@ def test_check_new_urls_trusts_uploaded_archive_and_falls_back_to_remote(ctx, mo
 
 
 def test_check_new_urls_uses_uploaded_thumbnail_archive_path(ctx, monkeypatch):
-    """The `check_new_urls` function must recognize thumbnail confirmations under the uploaded
-    archive.
+    """The `check_new_urls` function must recognize thumbnail confirmations
+    under the uploaded archive.
     """
     monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     url = "https://old.example.com/123/a.jpg"
@@ -236,9 +236,33 @@ def test_check_new_urls_uses_uploaded_thumbnail_archive_path(ctx, monkeypatch):
     assert cleanup.check_new_urls(ctx, {url_thumb: file}) is True
 
 
+def test_check_new_urls_skips_unrecoverable_source_pair(ctx, monkeypatch):
+    """The `check_new_urls` function must skip destination checks when both
+    source variants are unrecoverable.
+    """
+    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    full = "https://old.example.com/123/a.jpg"
+    thumb = "https://old.example.com/thumb/123/a.jpg"
+    write_csv(
+        ctx.path.posts,
+        ["pid", "date", "image_urls", "message"],
+        [["1", "0", repr([thumb]), f"<img src='{thumb}'>"]],
+    )
+    error = models.FileResult.error
+    file = models.ForumFile(
+        fileid="123", url=full, url_thumb=thumb, result=error, thumb_result=error
+    )
+    files = {full: file, thumb: file}
+    checked = []
+    ctx.url_ok = lambda url: checked.append(url) or True
+
+    assert cleanup.check_new_urls(ctx, files) is True
+    assert checked == []
+
+
 def test_grep_urls_in_file_returns_matching_pids(tmp_path):
-    """The `grep_urls_in_file` function must return PIDs whose content contains any non-empty URL
-    pattern.
+    """The `grep_urls_in_file` function must return PIDs whose content
+    contains any non-empty URL pattern.
     """
     updates = tmp_path / "updates.csv"
     updates.write_text(
@@ -252,8 +276,8 @@ def test_grep_urls_in_file_returns_matching_pids(tmp_path):
 
 
 def test_check_old_urls_detects_references_in_updated_or_nonupdated_posts(ctx, tmp_path):
-    """The `check_old_urls` function must fail verification when old references remain in updated
-    or non-updated posts.
+    """The `check_old_urls` function must fail verification when old references
+    remain in updated or non-updated posts.
     """
     # Create updates.csv (updated posts content)
     write_csv(
@@ -268,16 +292,12 @@ def test_check_old_urls_detects_references_in_updated_or_nonupdated_posts(ctx, t
     write_csv(
         ctx.path.posts_from_export,
         ["pid", "date", "image_urls", "message"],
-        [
-            ["20", "0", "[]", "legacy =123 somewhere"],
-        ],
+        [["20", "0", "[]", "legacy =123 somewhere"]],
     )
     write_csv(
         ctx.path.posts_from_api,
         ["pid", "date", "image_urls", "message"],
-        [
-            ["21", "0", "[]", "nope"],
-        ],
+        [["21", "0", "[]", "nope"]],
     )
     files_to_check = [
         models.ForumFile(fileid="123", url="https://old.example.com/123/a.jpg"),
@@ -318,7 +338,9 @@ def test_check_old_urls_detects_url_file_in_updated_post(ctx):
 
 
 def test_check_old_urls_matches_fileids_literally(ctx):
-    """The `check_old_urls` function must treat regex metacharacters in file IDs as literal text."""
+    """The `check_old_urls` function must treat regex metacharacters in
+    file IDs as literal text.
+    """
     write_csv(
         ctx.path.updates,
         ["pid", "result", "content"],
@@ -345,8 +367,8 @@ def test_check_old_urls_matches_fileids_literally(ctx):
 
 
 def test_delete_files_batches_candidates_for_admin_client(ctx, monkeypatch):
-    """The `delete_files` function must load deletion candidates and submit them to the Admin
-    client in batches of 100.
+    """The `delete_files` function must load deletion candidates and submit
+    them to the Admin client in batches of 100.
     """
     ctx.path.fileids_to_delete.write_text(json.dumps([str(i) for i in range(1, 205)]))
     monkeypatch.setattr(cleanup.time, "sleep", lambda *_a, **_k: None)

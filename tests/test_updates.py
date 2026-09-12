@@ -6,9 +6,63 @@ from tests.helpers import write_csv
 from toolbox import io, models, updates
 
 
+def test_rewrite_post_content_preserves_full_and_thumbnail_destinations():
+    """The `rewrite_post_content` function must preserve distinct full-image
+    and thumbnail destinations when both migrations succeed.
+    """
+    full = "https://old.example.com/123/a.jpg"
+    thumb = "https://old.example.com/thumb/123/a.jpg"
+    downloaded = models.FileResult.downloaded
+    file = models.ForumFile(
+        fileid="123",
+        url=full,
+        url_thumb=thumb,
+        url_file="/file?id=123",
+        result=downloaded,
+        thumb_result=downloaded,
+    )
+    files = {full: file, thumb: file, file.url_file: file}
+    message = f"<a href='{full}'><img src='{thumb}'></a>"
+
+    rewritten, touched = updates.rewrite_post_content(
+        message=message,
+        image_urls=[thumb],
+        files=files,
+        legacy=False,
+        new_url_func=lambda url: url.replace(
+            "https://old.example.com/", "https://new.example.com/"
+        ),
+    )
+
+    assert "href='https://new.example.com/123/a.jpg'" in rewritten
+    assert "src='https://new.example.com/thumb/123/a.jpg'" in rewritten
+    assert touched == {full, thumb}
+
+
+def test_rewrite_post_content_preserves_skipped_file():
+    """The `rewrite_post_content` function must leave intentionally skipped
+    files unchanged.
+    """
+    full = "https://old.example.com/123/a.jpg"
+    skipped = models.FileResult.skipped
+    file = models.ForumFile(fileid="123", url=full, result=skipped)
+
+    message = f"<img src='{full}'>"
+    rewritten, touched = updates.rewrite_post_content(
+        message=message,
+        image_urls=[full],
+        files={full: file},
+        legacy=False,
+        new_url_func=lambda url: url.replace("old.example.com", "new.example.com"),
+    )
+
+    assert rewritten == message
+    assert touched == set()
+
+
 def test_select_files_to_delete_blocks_kept_fileids_and_ignores_non_toolbox_files():
-    """The `select_files_to_delete` function must block a whole file ID when any reference is kept
-    and ignore non-Website Toolbox files.
+    """The `select_files_to_delete` function must block a whole file ID when
+    any reference is kept and ignore non-Website Toolbox files.
     """
     toolbox_file = models.ForumFile(
         fileid="123",
@@ -50,8 +104,8 @@ def test_select_files_to_delete_blocks_kept_fileids_and_ignores_non_toolbox_file
 
 
 def test_update_posts_dry_run_writes_preview_and_delete_candidates(ctx, monkeypatch):
-    """The `update_posts` function must write a dry-run preview and deletion candidates without
-    calling the API.
+    """The `update_posts` function must write a dry-run preview and deletion
+    candidates without calling the API.
     """
     # Avoid sleeping
     monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
@@ -143,8 +197,8 @@ def test_update_posts_dry_run_writes_preview_and_delete_candidates(ctx, monkeypa
 
 
 def test_update_posts_clears_stale_delete_handoffs_before_preflight(ctx, monkeypatch):
-    """The `update_posts` function must clear stale delete handoffs before an early preflight
-    return.
+    """The `update_posts` function must clear stale delete handoffs before
+    an early preflight return.
     """
     ctx.path.fileids_to_delete.write_text('["stale"]')
     ctx.path.fileids_to_delete_dry_run.write_text('["stale-dry"]')
@@ -164,8 +218,8 @@ def test_update_posts_clears_stale_delete_handoffs_before_preflight(ctx, monkeyp
 
 
 def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(ctx, monkeypatch):
-    """The `update_posts` function must leave the destructive delete handoff empty when final
-    old-reference verification fails.
+    """The `update_posts` function must leave the destructive delete handoff
+    empty when final old-reference verification fails.
     """
     ctx.dry_run = False
     ctx.args.dry_run = False
