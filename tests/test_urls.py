@@ -3,10 +3,9 @@ import pytest
 from toolbox import urls
 
 
-def test_find_urls_func_filters_and_sorts():
-    """The `find_urls_func` function should return a sorted, de-duplicated
-    list of urls that match the configured legacy prefix, excluding
-    non-matching hosts.
+def test_find_urls_func_returns_sorted_unique_matching_urls():
+    """The `find_urls_func` function must return sorted unique URLs that match the configured
+    prefix.
     """
     find_urls = urls.find_urls_func("https://old.example.com/")
     html = (
@@ -20,9 +19,9 @@ def test_find_urls_func_filters_and_sorts():
     assert find_urls(html) == ["https://old.example.com/a.jpg", "https://old.example.com/b.jpg"]
 
 
-def test_find_legacy_urls_in_img_and_link():
-    """The `find_legacy_urls` function should extract legacy attachment references
-    from both <a href='/file?id=...'> links and legacy hosted <img src='...'> urls.
+def test_find_legacy_urls_extracts_attachment_and_hosted_image_references():
+    """The `find_legacy_urls` function must extract legacy attachment links and Website Toolbox
+    hosted-image references while ignoring unrelated URLs.
     """
     html = (
         '<a href="/file?id=123">x</a>'
@@ -45,53 +44,16 @@ def test_find_legacy_urls_in_img_and_link():
         ("not a url", None),
     ],
 )
-def test_fileid_from_url(url, expected):
-    """The `fileid_from_url` function should extract the fileid component from
-    supported url shapes and and should return None when the input is not a
-    recognized file url.
+def test_fileid_from_url_extracts_supported_file_ids(url, expected):
+    """The `fileid_from_url` function must extract file IDs from supported URL forms and return
+    `None` for unrecognized input.
     """
     assert urls.fileid_from_url(url) == expected
 
 
-def test_remove_bad_url_de_links_image_and_adds_notice():
-    """The `remove_bad_url` function should remove src/href references to a
-    known-bad url and insert a visible '(missing image)' marker plus an HTML
-    comment for traceability.
-    """
-    bad = "https://old.example.com/999/missing.jpg"
-    html = f'<p><a href="{bad}"><img src="{bad}"/></a> hello</p>'
-    out = urls.remove_bad_url(html, bad)
-
-    # src and href should be removed
-    assert 'src="' not in out
-    assert 'href="' not in out
-
-    # notice inserted
-    assert "missing-image" in out
-    assert "(missing image)" in out
-
-    # comment includes Bad URL marker
-    assert "Bad URL:" in out
-
-
-def test_remove_bad_url_preserves_unrelated_link():
-    """The `remove_bad_url` function should preserve an enclosing link when its
-    destination is unrelated to the missing image.
-    """
-    bad = "https://old.example.com/999/missing.jpg"
-    destination = "https://example.com/page"
-    html = f'<p><a href="{destination}"><img src="{bad}"/></a></p>'
-
-    out = urls.remove_bad_url(html, bad)
-
-    assert f'href="{destination}"' in out
-    assert 'src="' not in out
-    assert "(missing image)" in out
-
-
-def test_get_new_url_func_basic_and_thumb():
-    """The `get_new_url_func` function should rewrite old urls to the new prefix,
-    preserving the '/thumb/' variant when present.
+def test_get_new_url_func_rewrites_full_and_thumbnail_urls():
+    """The `get_new_url_func` function must rewrite full-image and thumbnail URLs to the configured
+    destination prefix.
     """
     f = urls.get_new_url_func(
         old_prefix="https://old.example.com/",
@@ -102,10 +64,9 @@ def test_get_new_url_func_basic_and_thumb():
     assert f("https://old.example.com/thumb/123/a.jpg") == "https://new.example.com/thumb/123/a.jpg"
 
 
-def test_get_new_url_func_handles_param_quote_unquote():
-    """The `get_new_url_func` function should safely quote urls when embedding
-    them into query parameters, and should unquote them when converting from
-    param-encoded to path-style urls.
+def test_get_new_url_func_quotes_and_unquotes_parameterized_urls():
+    """The `get_new_url_func` function must quote path URLs when embedding them in query parameters
+    and unquote parameter values when converting them back to paths.
     """
     # Old has no param, new has param -> safe_quote should be used
     f = urls.get_new_url_func(
@@ -127,3 +88,38 @@ def test_get_new_url_func_handles_param_quote_unquote():
     )
     out2 = g("https://old.example.com/?url=a%23b.jpg")
     assert out2 == "https://new.example.com/a#b.jpg"
+
+
+def test_remove_bad_url_removes_dead_media_reference_and_adds_notice():
+    """The `remove_bad_url` function must remove dead image and link references and add a visible
+    missing-image notice.
+    """
+    bad = "https://old.example.com/999/missing.jpg"
+    html = f'<p><a href="{bad}"><img src="{bad}"/></a> hello</p>'
+    out = urls.remove_bad_url(html, bad)
+
+    # src and href should be removed
+    assert 'src="' not in out
+    assert 'href="' not in out
+
+    # notice inserted
+    assert "missing-image" in out
+    assert "(missing image)" in out
+
+    # comment includes Bad URL marker
+    assert "Bad URL:" in out
+
+
+def test_remove_bad_url_preserves_unrelated_enclosing_link():
+    """The `remove_bad_url` function must preserve an unrelated enclosing link when removing a
+    missing image.
+    """
+    bad = "https://old.example.com/999/missing.jpg"
+    destination = "https://example.com/page"
+    html = f'<p><a href="{destination}"><img src="{bad}"/></a></p>'
+
+    out = urls.remove_bad_url(html, bad)
+
+    assert f'href="{destination}"' in out
+    assert 'src="' not in out
+    assert "(missing image)" in out

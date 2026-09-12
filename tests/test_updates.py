@@ -5,8 +5,10 @@ import pytest
 from toolbox import io, models, updates
 
 
-def test_select_files_to_delete_is_fileid_safe_and_toolbox_only():
-    """Delete selection should block whole file IDs and reject non-Toolbox files."""
+def test_select_files_to_delete_blocks_kept_fileids_and_ignores_non_toolbox_files():
+    """The `select_files_to_delete` function must block a whole file ID when any reference is kept
+    and ignore non-Website Toolbox files.
+    """
     toolbox_file = models.ForumFile(
         fileid="123",
         url="https://old.example.com/123/a.jpg",
@@ -46,80 +48,9 @@ def test_select_files_to_delete_is_fileid_safe_and_toolbox_only():
     )
 
 
-def test_update_posts_clears_stale_delete_handoffs_before_preflight(ctx, monkeypatch, write_csv):
-    """An early preflight return should not leave candidates from an older run."""
-    ctx.path.fileids_to_delete.write_text('["stale"]')
-    ctx.path.fileids_to_delete_dry_run.write_text('["stale-dry"]')
-    write_csv(
-        ctx.path.files,
-        ["fileid", "pids", "url", "url_thumb", "url_file", "new_url", "result"],
-        [],
-    )
-    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: False)
-
-    updates.update_posts(ctx)
-    to_delete = ctx.path.fileids_to_delete
-    to_delete_dry_run = ctx.path.fileids_to_delete_dry_run
-
-    assert json.loads(to_delete.read_text()) == []
-    assert json.loads(to_delete_dry_run.read_text()) == []
-
-
-def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(
-    ctx, monkeypatch, write_csv
-):
-    """A failed final reference check should leave no destructive handoff behind."""
-    ctx.dry_run = False
-    ctx.args.dry_run = False
-    ctx.args.yes = True
-    write_csv(
-        ctx.path.posts,
-        ["pid", "date", "image_urls", "message"],
-        [
-            [
-                "1",
-                "0",
-                "['https://old.example.com/123/a.jpg']",
-                "<img src='https://old.example.com/123/a.jpg'/>",
-            ]
-        ],
-    )
-    write_csv(
-        ctx.path.files,
-        ["fileid", "pids", "url", "url_thumb", "url_file", "new_url", "result"],
-        [
-            [
-                "123",
-                "{'1'}",
-                "https://old.example.com/123/a.jpg",
-                "",
-                "/file?id=123",
-                "",
-                str(models.FileResult.downloaded.value),
-            ]
-        ],
-    )
-    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
-
-    class FakeClient:
-        def update_post(self, _pid, _message):
-            return True
-
-    ctx.api_client = FakeClient()
-
-    with pytest.raises(RuntimeError, match="Old Toolbox references remain"):
-        updates.update_posts(ctx)
-
-    to_delete = ctx.path.fileids_to_delete
-    assert json.loads(to_delete.read_text()) == []
-
-
-def test_update_posts_updates_content_and_writes_outputs(ctx, monkeypatch, write_csv):
-    """The `update_posts` function should rewrite legacy urls in post content to
-    the new host, record per-post update results, and emit the set of fileids
-    eligible for deletion.
+def test_update_posts_dry_run_writes_preview_and_delete_candidates(ctx, monkeypatch, write_csv):
+    """The `update_posts` function must write a dry-run preview and deletion candidates without
+    calling the API.
     """
     # Avoid sleeping
     monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
@@ -208,3 +139,77 @@ def test_update_posts_updates_content_and_writes_outputs(ctx, monkeypatch, write
     to_delete_dry_run = ctx.path.fileids_to_delete_dry_run
     dry_fileids = json.loads(to_delete_dry_run.read_text())
     assert dry_fileids == ["123"]
+
+
+def test_update_posts_clears_stale_delete_handoffs_before_preflight(ctx, monkeypatch, write_csv):
+    """The `update_posts` function must clear stale delete handoffs before an early preflight
+    return.
+    """
+    ctx.path.fileids_to_delete.write_text('["stale"]')
+    ctx.path.fileids_to_delete_dry_run.write_text('["stale-dry"]')
+    write_csv(
+        ctx.path.files,
+        ["fileid", "pids", "url", "url_thumb", "url_file", "new_url", "result"],
+        [],
+    )
+    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: False)
+
+    updates.update_posts(ctx)
+    to_delete = ctx.path.fileids_to_delete
+    to_delete_dry_run = ctx.path.fileids_to_delete_dry_run
+
+    assert json.loads(to_delete.read_text()) == []
+    assert json.loads(to_delete_dry_run.read_text()) == []
+
+
+def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(
+    ctx, monkeypatch, write_csv
+):
+    """The `update_posts` function must leave the destructive delete handoff empty when final
+    old-reference verification fails.
+    """
+    ctx.dry_run = False
+    ctx.args.dry_run = False
+    ctx.args.yes = True
+    write_csv(
+        ctx.path.posts,
+        ["pid", "date", "image_urls", "message"],
+        [
+            [
+                "1",
+                "0",
+                "['https://old.example.com/123/a.jpg']",
+                "<img src='https://old.example.com/123/a.jpg'/>",
+            ]
+        ],
+    )
+    write_csv(
+        ctx.path.files,
+        ["fileid", "pids", "url", "url_thumb", "url_file", "new_url", "result"],
+        [
+            [
+                "123",
+                "{'1'}",
+                "https://old.example.com/123/a.jpg",
+                "",
+                "/file?id=123",
+                "",
+                str(models.FileResult.downloaded.value),
+            ]
+        ],
+    )
+    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
+
+    class FakeClient:
+        def update_post(self, _pid, _message):
+            return True
+
+    ctx.api_client = FakeClient()
+
+    with pytest.raises(RuntimeError, match="Old Toolbox references remain"):
+        updates.update_posts(ctx)
+
+    to_delete = ctx.path.fileids_to_delete
+    assert json.loads(to_delete.read_text()) == []

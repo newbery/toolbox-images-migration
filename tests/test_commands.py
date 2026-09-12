@@ -2,8 +2,8 @@ from toolbox import commands
 
 
 def test_mode_download_files_auth_gate(ctx, capsys):
-    """The `mode_download_files` function should refuse to proceed when api
-    authentication/health checks fail and emit a user-visible message.
+    """The `mode_download_files` function must stop when API authentication fails and report the
+    failure.
     """
 
     class FakeApi:
@@ -18,9 +18,8 @@ def test_mode_download_files_auth_gate(ctx, capsys):
 
 
 def test_mode_download_files_happy_path_calls_pipeline(ctx, monkeypatch):
-    """The `mode_download_files` function should orchestrate export/api ingestion,
-    file extraction, downloads, and summarization in the expected order when the
-    api is accessible.
+    """The `mode_download_files` function must run the download pipeline in the expected order when
+    the API is available.
     """
 
     class FakeApi:
@@ -55,8 +54,8 @@ def test_mode_download_files_happy_path_calls_pipeline(ctx, monkeypatch):
 
 
 def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ctx, monkeypatch):
-    """The `mode_download_links` function should request link-only discovery
-    semantics without changing the shared configuration.
+    """The `mode_download_links` function must request link-only discovery without mutating shared
+    configuration.
     """
 
     class FakeApi:
@@ -101,9 +100,8 @@ def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ct
 
 
 def test_mode_update_posts_and_delete_files_auth_gate(ctx, capsys):
-    """The `mode_update_posts` and `mode_delete_files` functions should enforce
-    their respective auth checks and emit a failure message instead of performing
-    destructive operations.
+    """The update and delete modes must enforce their respective authentication checks before
+    destructive work.
     """
 
     class BadApi:
@@ -126,8 +124,8 @@ def test_mode_update_posts_and_delete_files_auth_gate(ctx, capsys):
 
 
 def test_mode_update_legacy_links_calls_expected(ctx, monkeypatch):
-    """The `mode_update_legacy_links` function should run the legacy-link update
-    pipeline with legacy semantics without changing shared configuration.
+    """The `mode_update_legacy_links` function must run the legacy-link update pipeline without
+    mutating shared configuration.
     """
 
     class GoodApi:
@@ -173,7 +171,9 @@ def test_mode_update_legacy_links_calls_expected(ctx, monkeypatch):
 
 
 def test_mode_archive_downloads_logs_and_archives(ctx, monkeypatch):
-    """The archive mode should log the run and invoke local upload confirmation."""
+    """The `mode_archive_downloads` function must log the run and invoke local
+    upload confirmation.
+    """
     calls = []
     monkeypatch.setattr(commands.io, "log", lambda context: calls.append("log"))
     monkeypatch.setattr(commands, "archive_downloads", lambda context: calls.append("archive"))

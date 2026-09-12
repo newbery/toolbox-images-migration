@@ -5,8 +5,8 @@ import pytest
 from toolbox import cli, models
 
 
-def test_parse_args_parses_mode(monkeypatch):
-    """The `parse_args` function should accept a valid mode and set args.mode."""
+def test_parse_args_accepts_valid_mode(monkeypatch):
+    """The `parse_args` function must accept a valid mode and store it in the parsed arguments."""
     monkeypatch.setattr(cli, "modes", lambda: {"download_files": lambda _ctx: None})
 
     args = cli.parse_args(["download_files"])
@@ -14,18 +14,16 @@ def test_parse_args_parses_mode(monkeypatch):
 
 
 def test_parse_args_rejects_unknown_mode(monkeypatch):
-    """The `parse_args` function should reject unknown modes via argparse by
-    raising SystemExit for invalid choices.
-    """
+    """The `parse_args` function must reject a mode that is not exposed by the CLI."""
     monkeypatch.setattr(cli, "modes", lambda: {"download_files": lambda _ctx: None})
 
     with pytest.raises(SystemExit):
         cli.parse_args(["nope"])
 
 
-def test_main_parses_initializes_and_dispatches_mode(monkeypatch):
-    """The `main` function should parse argv, initialize context and clients,
-    and dispatch the selected mode exactly once using modes()[args.mode].
+def test_main_parses_initializes_and_dispatches_selected_mode(monkeypatch):
+    """The `main` function must parse arguments, initialize the context and clients, and dispatch
+    the selected mode exactly once.
     """
     called = {"parse": 0, "ctx": 0, "init": 0, "mode": 0}
     args_obj = models.CliArgs(mode="download_files")
@@ -70,8 +68,10 @@ def test_main_parses_initializes_and_dispatches_mode(monkeypatch):
     assert called == {"parse": 1, "ctx": 1, "init": 1, "mode": 1}
 
 
-def test_modes_include_archive_and_uploaded_diagnostic():
-    """The CLI exposes the new archive workflow and renamed uploaded diagnostic."""
+def test_modes_exposes_archive_and_uploaded_diagnostic_modes():
+    """The `modes` function must expose the archive workflow and the renamed uploaded-files
+    diagnostic.
+    """
     cli.modes.cache_clear()
     try:
         available = cli.modes()

@@ -5,10 +5,9 @@ import pytest
 from toolbox import discovery, io, models
 
 
-def test_posts_from_export_collects_urls(ctx):
-    """The `posts_from_export` function should parse the export posts csv,
-    extract image urls, and write a normalized `posts_from_export` csv with
-    per-post url lists.
+def test_posts_from_export_extracts_image_urls_and_writes_output(ctx):
+    """The `posts_from_export` function must collect exported posts, extract image URLs, and write
+    the normalized posts output.
     """
     # write export/posts.csv
     posts_csv = ctx.path.export_dir / "posts.csv"
@@ -26,10 +25,9 @@ def test_posts_from_export_collects_urls(ctx):
     assert out_rows[0]["pid"] == "1"
 
 
-def test_posts_from_api_stops_when_pid_already_seen(ctx):
-    """The `posts_from_api` function should paginate api results into the posts
-    dict, extract image urls, and stop early once it encounters a postId already
-    present in the seed posts map.
+def test_posts_from_api_adds_new_posts_and_stops_at_existing_pid(ctx):
+    """The `posts_from_api` function must add new API posts, extract image URLs, and stop when it
+    encounters an already-seen post ID.
     """
 
     class FakeApiRequests:
@@ -74,10 +72,9 @@ def test_posts_from_api_stops_when_pid_already_seen(ctx):
     assert "3" not in out
 
 
-def test_files_from_posts_toolbox_parses_fileids_and_thumb(ctx):
-    """The `files_from_posts` function should group image urls by fileid,
-    detect thumb urls, record canonical paths, and accumulate the set of
-    post ids referencing each file.
+def test_files_from_posts_groups_toolbox_images_by_fileid_and_thumbnail(ctx):
+    """The `files_from_posts` function must group Website Toolbox image URLs by file ID, record
+    full and thumbnail URLs, derive the download path, and accumulate referencing post IDs.
     """
     # Make it look like a toolbox/cloudfront url so toolbox=True
     ctx.config.old_url = "https://abc.cloudfront.net/"
@@ -96,10 +93,8 @@ def test_files_from_posts_toolbox_parses_fileids_and_thumb(ctx):
     assert f.path == "999/123/a.jpg"
 
 
-def test_files_from_posts_skips_recent_or_nonmatching_test_post(ctx):
-    """The `files_from_posts` function should mark files as skipped when the
-    containing post is newer than the configured skip_days threshold.
-    """
+def test_files_from_posts_skips_recent_posts(ctx):
+    """The `files_from_posts` function must mark files from recent posts as skipped."""
     ctx.config.old_url = "https://abc.cloudfront.net/"
     ctx.config.old_url_thumb = ""
     ctx.config.skip_days = 1  # skip anything newer than 1 day ago
@@ -111,8 +106,10 @@ def test_files_from_posts_skips_recent_or_nonmatching_test_post(ctx):
     assert files["111"].result == models.FileResult.skipped
 
 
-def test_files_from_posts_preserves_references_with_bad_date(ctx):
-    """Files referenced by a post with a malformed date should be kept and skipped."""
+def test_files_from_posts_preserves_references_with_malformed_date(ctx):
+    """The `files_from_posts` function must preserve references from posts with malformed dates and
+    mark their files as skipped.
+    """
     ctx.config.old_url = "https://abc.cloudfront.net/"
     ctx.config.old_url_thumb = ""
     ctx.config.skip_days = 1
@@ -126,7 +123,9 @@ def test_files_from_posts_preserves_references_with_bad_date(ctx):
 
 
 def test_files_from_posts_rejects_unsafe_download_path(ctx):
-    """Decoded image paths should not be allowed to escape the download directory."""
+    """The `files_from_posts` function must reject decoded image paths that escape the download
+    directory.
+    """
     ctx.config.old_url = "https://abc.cloudfront.net/"
     url = "https://abc.cloudfront.net/%2e%2e/123/escape.jpg"
     posts = {"1": models.Post(date="0", image_urls=[url])}
@@ -135,10 +134,9 @@ def test_files_from_posts_rejects_unsafe_download_path(ctx):
         discovery.files_from_posts(ctx, posts)
 
 
-def test_files_from_export_builds_new_url(ctx):
-    """The `files_from_export` function should resolve legacy '/file?id=' links
-    using attachment metadata to produce a concrete legacy file url for later
-    checking/updating.
+def test_files_from_export_resolves_file_reference_from_attachment_metadata(ctx):
+    """The `files_from_export` function must use attachment metadata to resolve /file?id=
+    references to concrete file URLs.
     """
     # Posts with legacy /file?id= urls; attachments.csv supplies filename
     ctx.config.old_url = "https://abc.cloudfront.net/"
@@ -151,7 +149,9 @@ def test_files_from_export_builds_new_url(ctx):
 
 
 def test_files_from_export_duplicate_rows_do_not_hide_missing_metadata(ctx):
-    """Duplicate attachment rows should not count as distinct resolved file IDs."""
+    """The `files_from_export` function must not let duplicate attachment rows hide missing
+    metadata for another file ID.
+    """
     ctx.config.old_url = "https://abc.cloudfront.net/"
     urls = ["/file?id=123", "/file?id=456"]
     post = models.Post(date="0", image_urls=urls)

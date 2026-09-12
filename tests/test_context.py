@@ -5,8 +5,16 @@ import pytest
 from toolbox import context, models
 
 
-def test_config_merges_dotenv_and_env(monkeypatch):
-    """Config loading should merge sources and coerce values to typed fields."""
+def test_config_from_mapping_rejects_missing_required_values():
+    """The `Config.from_mapping` method must reject missing required configuration values."""
+    with pytest.raises(ValueError, match="Missing required config value: EXPORT_DIR"):
+        context.Config.from_mapping({})
+
+
+def test_config_loads_sources_with_precedence_and_typed_values(monkeypatch):
+    """The `config` function must merge dotenv and environment sources with the expected precedence
+    and typed values.
+    """
 
     def fake_dotenv_values(filename):
         if filename == ".env":
@@ -48,46 +56,6 @@ def test_config_merges_dotenv_and_env(monkeypatch):
     assert not hasattr(cfg, "other")
 
 
-def test_paths_builds_expected_paths(tmp_path, config_for):
-    """The `paths` function should build the derived filesystem paths
-    (exports/downloads/output and expected filenames) from the config directories.
-    """
-    cfg = config_for(tmp_path)
-    paths = context.paths(cfg)
-    assert paths.export_dir.name == "export"
-    assert paths.posts.name == "posts.csv"
-    assert paths.fileids_to_delete.name == "fileids_to_delete.json"
-
-
-def test_config_from_mapping_rejects_missing_required_values():
-    """Configuration loading should fail rather than silently default required paths."""
-    with pytest.raises(ValueError, match="Missing required config value: EXPORT_DIR"):
-        context.Config.from_mapping({})
-
-
-@pytest.mark.parametrize(
-    ("changes", "message"),
-    [
-        ({"old_url": "https://old.example.com"}, "OLD_URL must end with '/':"),
-        ({"new_url": "not-a-url"}, r"NEW_URL must be an absolute http\(s\) URL"),
-        ({"skip_days": -1}, "SKIP_DAYS must be greater than or equal to 0"),
-    ],
-)
-def test_validate_config_rejects_invalid_values(tmp_path, config_for, changes, message):
-    """Configuration validation should reject malformed URLs and negative skip days."""
-    cfg = config_for(tmp_path, **changes)
-
-    with pytest.raises(ValueError, match=message):
-        context.validate_config(cfg, dry_run=False)
-
-
-def test_validate_config_allows_query_url_prefix(tmp_path, config_for):
-    """Image URL prefixes with query parameters should not require a trailing slash."""
-    cfg = config_for(tmp_path, new_url="https://new.example.com/?url=")
-
-    context.validate_config(cfg, dry_run=False)
-
-
 @pytest.mark.parametrize(
     ("changes", "name"),
     [
@@ -101,41 +69,57 @@ def test_validate_config_allows_query_url_prefix(tmp_path, config_for):
     ],
 )
 def test_validate_config_requires_complete_migration_config(tmp_path, config_for, changes, name):
-    """Configuration validation should require the full migration configuration."""
+    """The `validate_config` function must require all migration configuration values."""
     cfg = config_for(tmp_path, **changes)
 
     with pytest.raises(ValueError, match=f"Missing required config value: {name}"):
         context.validate_config(cfg, dry_run=False)
 
 
-def test_init_context_allows_local_new_url_in_dry_run(tmp_path, monkeypatch, config_for):
-    """Dry-run context initialization should allow an existing local NEW_URL directory."""
-    new_dir = tmp_path / "new"
-    new_dir.mkdir()
-    cfg = config_for(tmp_path, new_url=str(new_dir), dry_run=True)
-    monkeypatch.setattr(context, "config", lambda: cfg)
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"old_url": "https://old.example.com"}, "OLD_URL must end with '/':"),
+        ({"new_url": "not-a-url"}, r"NEW_URL must be an absolute http\(s\) URL"),
+        ({"skip_days": -1}, "SKIP_DAYS must be greater than or equal to 0"),
+    ],
+)
+def test_validate_config_rejects_invalid_values(tmp_path, config_for, changes, message):
+    """The `validate_config` function must reject invalid URL and negative numeric configuration
+    values.
+    """
+    cfg = config_for(tmp_path, **changes)
 
-    ctx = context.init_context(models.CliArgs(mode="download_files"))
-
-    assert ctx.config.new_url == str(new_dir)
-    assert ctx.dry_run is True
-
-
-def test_init_context_rejects_local_new_url_in_apply(tmp_path, monkeypatch, config_for):
-    """Apply-mode context initialization should require NEW_URL to be an http(s) URL."""
-    new_dir = tmp_path / "new"
-    new_dir.mkdir()
-    cfg = config_for(tmp_path, new_url=str(new_dir), dry_run=True)
-    monkeypatch.setattr(context, "config", lambda: cfg)
-
-    with pytest.raises(ValueError, match=r"NEW_URL must be an absolute http\(s\) URL"):
-        context.init_context(models.CliArgs(mode="download_files", apply=True))
+    with pytest.raises(ValueError, match=message):
+        context.validate_config(cfg, dry_run=False)
 
 
-def test_init_context_populates_typed_context_and_config_dry_run_false(
+def test_validate_config_allows_query_url_prefix_without_trailing_slash(tmp_path, config_for):
+    """The `validate_config` function must allow URL prefixes with query parameters without a
+    trailing slash.
+    """
+    cfg = config_for(tmp_path, new_url="https://new.example.com/?url=")
+
+    context.validate_config(cfg, dry_run=False)
+
+
+def test_paths_builds_expected_derived_paths(tmp_path, config_for):
+    """The `paths` function must build the expected derived paths from the
+    configured directories.
+    """
+    cfg = config_for(tmp_path)
+    paths = context.paths(cfg)
+    assert paths.export_dir.name == "export"
+    assert paths.posts.name == "posts.csv"
+    assert paths.fileids_to_delete.name == "fileids_to_delete.json"
+
+
+def test_init_context_builds_context_using_configured_apply_mode(
     tmp_path, monkeypatch, capsys, config_for
 ):
-    """The typed context should use the configured dry-run value by default."""
+    """The `init_context` function must build the runtime context and use configured apply mode by
+    default.
+    """
     cfg = config_for(tmp_path, dry_run=False)
     monkeypatch.setattr(context, "config", lambda: cfg)
 
@@ -149,10 +133,10 @@ def test_init_context_populates_typed_context_and_config_dry_run_false(
     assert capsys.readouterr().out == ""
 
 
-def test_init_context_sets_dry_run_true_and_prints_banner(
+def test_init_context_uses_configured_dry_run_and_prints_banner(
     tmp_path, monkeypatch, capsys, config_for
 ):
-    """Configured dry-run should produce a dry-run context and banner."""
+    """The `init_context` function must use configured dry-run mode and print the dry-run banner."""
     cfg = config_for(tmp_path, dry_run=True)
     monkeypatch.setattr(context, "config", lambda: cfg)
 
@@ -163,8 +147,8 @@ def test_init_context_sets_dry_run_true_and_prints_banner(
     assert "---- Dry Run (no remote changes) ----" in out
 
 
-def test_init_context_cli_apply_overrides_config(tmp_path, monkeypatch, config_for):
-    """An explicit --apply option should override configured dry-run mode."""
+def test_init_context_cli_apply_overrides_configured_dry_run(tmp_path, monkeypatch, config_for):
+    """The `init_context` function must let --apply override configured dry-run mode."""
     cfg = config_for(tmp_path, dry_run=True)
     monkeypatch.setattr(context, "config", lambda: cfg)
 
@@ -173,10 +157,35 @@ def test_init_context_cli_apply_overrides_config(tmp_path, monkeypatch, config_f
     assert ctx.dry_run is False
 
 
-def test_init_clients_configures_session_clients_and_url_ok(ctx, monkeypatch):
-    """The `init_clients` function should mount FileAdapter for file://,
-    set User-Agent, attach client helpers, and expose the `url_ok` function
-    that accepts 200/206 and rejects other status codes.
+def test_init_context_allows_local_new_url_in_dry_run(tmp_path, monkeypatch, config_for):
+    """The `init_context` function must allow an existing local NEW_URL
+    directory in dry-run mode.
+    """
+    new_dir = tmp_path / "new"
+    new_dir.mkdir()
+    cfg = config_for(tmp_path, new_url=str(new_dir), dry_run=True)
+    monkeypatch.setattr(context, "config", lambda: cfg)
+
+    ctx = context.init_context(models.CliArgs(mode="download_files"))
+
+    assert ctx.config.new_url == str(new_dir)
+    assert ctx.dry_run is True
+
+
+def test_init_context_rejects_local_new_url_in_apply_mode(tmp_path, monkeypatch, config_for):
+    """The `init_context` function must reject a local NEW_URL directory in apply mode."""
+    new_dir = tmp_path / "new"
+    new_dir.mkdir()
+    cfg = config_for(tmp_path, new_url=str(new_dir), dry_run=True)
+    monkeypatch.setattr(context, "config", lambda: cfg)
+
+    with pytest.raises(ValueError, match=r"NEW_URL must be an absolute http\(s\) URL"):
+        context.init_context(models.CliArgs(mode="download_files", apply=True))
+
+
+def test_init_clients_configures_session_clients_and_url_helper(ctx, monkeypatch):
+    """The `init_clients` function must configure the session, attach service clients, and install
+    the URL availability helper.
     """
 
     class FakeResp:
@@ -244,9 +253,9 @@ def test_init_clients_configures_session_clients_and_url_ok(ctx, monkeypatch):
     assert sess.head_calls[0] == ("http://ok.example", True, 30)
 
 
-def test_init_clients_creates_session_when_none(ctx, monkeypatch):
-    """The `init_clients` function should create a `requests.Session` when session
-    is None and store it on `context.session`.
+def test_init_clients_creates_session_when_not_provided(ctx, monkeypatch):
+    """The `init_clients` function must create and store a requests session
+    when none is provided.
     """
 
     class FakeSession:

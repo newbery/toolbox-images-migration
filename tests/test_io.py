@@ -5,22 +5,20 @@ import pytest
 from toolbox import context, io, models
 
 
-def test_batched_basic():
-    """The `batched` function should yield consecutive lists of length n,
-    preserving order, with a final shorter batch if needed.
-    """
+def test_batched_yields_consecutive_batches():
+    """The `batched` function must preserve order and yield a shorter final batch when needed."""
     assert list(io.batched([1, 2, 3, 4, 5], 2)) == [[1, 2], [3, 4], [5]]
 
 
 def test_batched_rejects_non_positive_batch_size():
-    """The `batched` function should reject non-positive batch sizes."""
+    """The `batched` function must reject non-positive batch sizes."""
     with pytest.raises(ValueError, match="n must be at least one"):
         list(io.batched([1, 2], 0))
 
 
-def test_friendly_size_units():
-    """The `friendly_size` function should format byte counts into stable
-    human-readable units (bytes/kb/MB) using expected thresholds and casing.
+def test_friendly_size_formats_expected_units():
+    """The `friendly_size` function must format byte counts using the expected unit thresholds and
+    labels.
     """
     assert io.friendly_size(10) == "10 bytes"
     assert io.friendly_size(1024) == "1024 bytes"
@@ -28,17 +26,15 @@ def test_friendly_size_units():
     assert io.friendly_size(1024 * 1024 + 10) == "1 MB"
 
 
-def test_read_csv_missing_yields_nothing(tmp_path):
-    """The `read_csv` function should be tolerant of missing files and
-    should yield no rows rather than raising.
-    """
+def test_read_csv_missing_file_yields_no_rows(tmp_path):
+    """The `read_csv` function must yield no rows when the input file does not exist."""
     rows = list(io.read_csv(tmp_path / "missing.csv"))
     assert rows == []
 
 
-def test_read_csv_yields_rows(tmp_path):
-    """The `read_csv` function should yield dictionaries keyed by csv headers
-    with string values from each row.
+def test_read_csv_yields_header_keyed_string_rows(tmp_path):
+    """The `read_csv` function must yield rows as dictionaries keyed by CSV headers with string
+    values.
     """
     p = tmp_path / "a.csv"
     p.write_text("pid,date,message\n1,2,hi\n")
@@ -46,25 +42,34 @@ def test_read_csv_yields_rows(tmp_path):
     assert rows == [{"pid": "1", "date": "2", "message": "hi"}]
 
 
-def test_linecount_missing_returns_0(tmp_path):
-    """The `linecount` function should return 0 for a missing file path
-    (fast-path for non-existent inputs).
-    """
+def test_linecount_missing_file_returns_zero(tmp_path):
+    """The `linecount` function must return zero when the input file does not exist."""
     assert io.linecount(tmp_path / "nope.txt") == 0
 
 
-def test_linecount_counts_lines(tmp_path):
-    """The `linecount` function should return the number of newline-delimited
-    lines in an existing text file.
+def test_linecount_counts_existing_file_lines(tmp_path):
+    """The `linecount` function must return the number of newline-delimited lines in an existing
+    file.
     """
     p = tmp_path / "x.txt"
     p.write_text("a\nb\nc\n")
     assert io.linecount(p) == 3
 
 
-def test_rotate_output_archive_rotates_and_prunes(tmp_path, monkeypatch, config_for):
-    """The `rotate_output_archive` function should archive a non-empty output
-    directory into a timestamped archive folder, and recreate the output dir,
+def test_linecount_reflects_file_changes(tmp_path):
+    """The `linecount` function must reflect changes made after an earlier count."""
+    p = tmp_path / "x.txt"
+    p.write_text("a\n")
+    assert io.linecount(p) == 1
+
+    p.write_text("a\nb\n")
+    assert io.linecount(p) == 2
+
+
+def test_rotate_output_archive_archives_output_and_prunes_old_archives(
+    tmp_path, monkeypatch, config_for
+):
+    """The `rotate_output_archive` function must archive a non-empty output directory, recreate it,
     and prune older archives beyond the retention count.
     """
     export_dir = tmp_path / "export"
@@ -111,20 +116,8 @@ def test_rotate_output_archive_rotates_and_prunes(tmp_path, monkeypatch, config_
     assert len(dirs) <= 3  # old pruned + new archive (timestamp) + maybe some remain
 
 
-def test_linecount_reflects_file_changes(tmp_path):
-    """The `linecount` function should reflect changes made after an earlier count."""
-    p = tmp_path / "x.txt"
-    p.write_text("a\n")
-    assert io.linecount(p) == 1
-
-    p.write_text("a\nb\n")
-    assert io.linecount(p) == 2
-
-
-def test_log_writes_line(ctx, monkeypatch):
-    """The `log` function should append a timestamped line containing the
-    provided message to the run's log file.
-    """
+def test_log_appends_timestamped_message(ctx, monkeypatch):
+    """The `log` function must append a timestamped message to the run log."""
 
     class FixedDateTime:
         @classmethod

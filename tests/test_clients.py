@@ -3,9 +3,9 @@ import pytest
 from toolbox import clients
 
 
-def test_downloader_replaces_target_only_after_download_completes(ctx, tmp_path):
-    """The `download` method should replace the target only after the entire
-    response body has been written successfully.
+def test_downloader_download_creates_target_only_after_download_completes(ctx, tmp_path):
+    """The `Downloader.download` method must create the target only after the entire response body
+    has been written successfully.
     """
     target = tmp_path / "nested" / "image.jpg"
     part = target.with_name(f"{target.name}.part")
@@ -45,9 +45,9 @@ def test_downloader_replaces_target_only_after_download_completes(ctx, tmp_path)
     assert not part.exists()
 
 
-def test_downloader_removes_partial_file_and_preserves_target_on_error(ctx, tmp_path):
-    """The `download` method should remove its partial file and preserve an
-    existing target when streaming fails.
+def test_downloader_download_removes_partial_file_and_preserves_target_on_error(ctx, tmp_path):
+    """The `Downloader.download` method must remove the partial file and preserve an existing
+    target when streaming fails.
     """
     target = tmp_path / "image.jpg"
     target.write_bytes(b"existing")
@@ -83,9 +83,9 @@ def test_downloader_removes_partial_file_and_preserves_target_on_error(ctx, tmp_
     assert not part.exists()
 
 
-def test_admin_delete_files_refuses_missing_files_form(ctx):
-    """The `delete_files` method should refuse to post deletions when the
-    expected `frmFiles` form is missing from the admin page.
+def test_admin_client_delete_files_refuses_missing_files_form(ctx):
+    """The `AdminClient.delete_files` method must refuse to post deletions when the expected
+    `frmFiles` form is missing.
     """
 
     class FakeResponse:
