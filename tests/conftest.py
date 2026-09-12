@@ -70,17 +70,3 @@ def ctx(tmp_path) -> context.Context:
     args = models.CliArgs(mode="download_files", dry_run=True, yes=True)
 
     return context.Context(args=args, config=cfg, path=path, dry_run=True)
-
-
-@pytest.fixture
-def write_csv():
-    import csv
-
-    def _write_csv(path: Path, header, rows):
-        with path.open("w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(header)
-            for row in rows:
-                writer.writerow(row)
-
-    return _write_csv

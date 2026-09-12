@@ -1,5 +1,6 @@
 import pytest
 
+from tests.helpers import write_csv
 from toolbox import download, io, models
 
 
@@ -129,7 +130,7 @@ def test_download_files_rejects_path_outside_download_directory(ctx):
         download.download_files(ctx, files)
 
 
-def test_summarize_writes_migratable_posts_and_files(ctx, write_csv):
+def test_summarize_writes_migratable_posts_and_files(ctx):
     """The `summarize` function must write consolidated posts and files while excluding posts with
     no migratable files.
     """

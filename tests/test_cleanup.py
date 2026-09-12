@@ -1,5 +1,6 @@
 import json
 
+from tests.helpers import write_csv
 from toolbox import cleanup, models
 
 
@@ -136,9 +137,7 @@ def test_archive_downloads_removes_ds_store_and_empty_directories(ctx, monkeypat
     assert "1 archived; 0 remaining" in out
 
 
-def test_check_new_urls_skips_skipped_files_and_uses_local_file_url(
-    ctx, tmp_path, monkeypatch, write_csv
-):
+def test_check_new_urls_skips_skipped_files_and_uses_local_file_url(ctx, tmp_path, monkeypatch):
     """The `check_new_urls` function must ignore skipped files and check local destinations via
     file:// URLs.
     """
@@ -179,9 +178,7 @@ def test_check_new_urls_skips_skipped_files_and_uses_local_file_url(
     assert cleanup.check_new_urls(ctx, files) is True
 
 
-def test_check_new_urls_trusts_uploaded_archive_and_falls_back_to_remote(
-    ctx, monkeypatch, write_csv
-):
+def test_check_new_urls_trusts_uploaded_archive_and_falls_back_to_remote(ctx, monkeypatch):
     """The `check_new_urls` function must trust archived files and check unarchived destination
     URLs.
     """
@@ -211,7 +208,7 @@ def test_check_new_urls_trusts_uploaded_archive_and_falls_back_to_remote(
     assert checked == ["https://new.example.com/456/b.jpg"]
 
 
-def test_check_new_urls_uses_uploaded_thumbnail_archive_path(ctx, monkeypatch, write_csv):
+def test_check_new_urls_uses_uploaded_thumbnail_archive_path(ctx, monkeypatch):
     """The `check_new_urls` function must recognize thumbnail confirmations under the uploaded
     archive.
     """
@@ -254,7 +251,7 @@ def test_grep_urls_in_file_returns_matching_pids(tmp_path):
     assert out.split() == ["3"]
 
 
-def test_check_old_urls_detects_references_in_updated_or_nonupdated_posts(ctx, tmp_path, write_csv):
+def test_check_old_urls_detects_references_in_updated_or_nonupdated_posts(ctx, tmp_path):
     """The `check_old_urls` function must fail verification when old references remain in updated
     or non-updated posts.
     """
@@ -290,7 +287,7 @@ def test_check_old_urls_detects_references_in_updated_or_nonupdated_posts(ctx, t
     assert ok is False
 
 
-def test_check_old_urls_detects_url_file_in_updated_post(ctx, write_csv):
+def test_check_old_urls_detects_url_file_in_updated_post(ctx):
     """The `check_old_urls` function must detect surviving /file?id= references
     in updated content.
     """
@@ -320,7 +317,7 @@ def test_check_old_urls_detects_url_file_in_updated_post(ctx, write_csv):
     assert cleanup.check_old_urls(ctx, files_to_check, legacy=False) is False
 
 
-def test_check_old_urls_matches_fileids_literally(ctx, write_csv):
+def test_check_old_urls_matches_fileids_literally(ctx):
     """The `check_old_urls` function must treat regex metacharacters in file IDs as literal text."""
     write_csv(
         ctx.path.updates,

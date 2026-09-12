@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from tests.helpers import write_csv
 from toolbox import io, models, updates
 
 
@@ -48,7 +49,7 @@ def test_select_files_to_delete_blocks_kept_fileids_and_ignores_non_toolbox_file
     )
 
 
-def test_update_posts_dry_run_writes_preview_and_delete_candidates(ctx, monkeypatch, write_csv):
+def test_update_posts_dry_run_writes_preview_and_delete_candidates(ctx, monkeypatch):
     """The `update_posts` function must write a dry-run preview and deletion candidates without
     calling the API.
     """
@@ -141,7 +142,7 @@ def test_update_posts_dry_run_writes_preview_and_delete_candidates(ctx, monkeypa
     assert dry_fileids == ["123"]
 
 
-def test_update_posts_clears_stale_delete_handoffs_before_preflight(ctx, monkeypatch, write_csv):
+def test_update_posts_clears_stale_delete_handoffs_before_preflight(ctx, monkeypatch):
     """The `update_posts` function must clear stale delete handoffs before an early preflight
     return.
     """
@@ -162,9 +163,7 @@ def test_update_posts_clears_stale_delete_handoffs_before_preflight(ctx, monkeyp
     assert json.loads(to_delete_dry_run.read_text()) == []
 
 
-def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(
-    ctx, monkeypatch, write_csv
-):
+def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(ctx, monkeypatch):
     """The `update_posts` function must leave the destructive delete handoff empty when final
     old-reference verification fails.
     """
