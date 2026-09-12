@@ -41,7 +41,10 @@ def download_files(context: Context, files: FileMap) -> FileMap:
 
     skipped = 0
     downloaded = 0
-    errors = set()
+    errors: set[str] = set()
+    thumb_errors: set[str] = set()
+    full_errors_with_thumb: set[str] = set()
+    both_errors: set[str] = set()
 
     # Download images, skipping recent images and problem downloads
     size = 0
@@ -62,17 +65,30 @@ def download_files(context: Context, files: FileMap) -> FileMap:
                 errors.add(fileid)
                 file.result = FileResult.error
 
-            # Thumb image
-            if file.url_thumb and file.result is FileResult.downloaded:
+            # Thumb image. Attempt this independently of the full image so either
+            # variant can serve as the migration fallback for the other.
+            if file.url_thumb:
                 size_ = download_file(file.url_thumb, f"thumb/{file.path}")
                 if size_:
                     size += size_
+                    file.thumb_result = FileResult.downloaded
                 else:
-                    errors.add(fileid)
-                    file.result = FileResult.error
+                    file.thumb_result = FileResult.error
 
-            if file.result is FileResult.downloaded:
+            full_ok = file.result is FileResult.downloaded
+            thumb_ok = file.thumb_result is FileResult.downloaded
+            if full_ok or thumb_ok:
                 downloaded += 1
+
+            if file.url_thumb:
+                if not full_ok and thumb_ok:
+                    full_errors_with_thumb.add(fileid)
+                    errors.discard(fileid)
+                elif full_ok and not thumb_ok:
+                    thumb_errors.add(fileid)
+                elif not full_ok and not thumb_ok:
+                    both_errors.add(fileid)
+                    errors.discard(fileid)
 
             bar(1)
 
@@ -84,9 +100,27 @@ def download_files(context: Context, files: FileMap) -> FileMap:
                 break
 
     if errors:
-        print("Downloads: ! Errors (probably old deleted images):")
+        print("Downloads: ! Full source unavailable:")
         for fileid in sorted(errors):
             print(f" {files[fileid].pids} {files[fileid].url}")
+
+    if full_errors_with_thumb:
+        print("Downloads: ! Full source unavailable (thumbnail retained):")
+        for fileid in sorted(full_errors_with_thumb):
+            print(f" {files[fileid].pids} {files[fileid].url}")
+
+    if thumb_errors:
+        print("Downloads: ! Thumbnail source unavailable (full image retained):")
+        for fileid in sorted(thumb_errors):
+            print(f" {files[fileid].pids} {files[fileid].url_thumb}")
+
+    if both_errors:
+        print(
+            "Downloads: ! Full and thumbnail sources unavailable; media treated as unrecoverable:"
+        )
+        for fileid in sorted(both_errors):
+            file = files[fileid]
+            print(f" {file.pids} full={file.url} thumb={file.url_thumb}")
 
     print(f"Skipped {skipped} images/files and downloaded {downloaded} ({friendly_size(size)})")
 
@@ -102,19 +136,14 @@ def summarize(context: Context, files: FileMap, legacy: bool = False) -> None:
     posts_output_path = context.path.posts
     files_output_path = context.path.files
 
-    # Collect set of all post ids that should be skipped
-    posts_to_skip = set()
-    for file in files.values():
-        if file.result is FileResult.skipped:
-            posts_to_skip.update(file.pids)
-
-    # Generate reverse map of post_ids to fileids but exclude posts that
-    # are in set of posts_to_skip
+    # Generate reverse map of post_ids to fileids. A skipped file suppresses only
+    # that file; it must not suppress migration of other files in the same post.
     posts_to_process = defaultdict(set)
     for fileid, file in files.items():
+        if file.result is FileResult.skipped:
+            continue
         for pid in file.pids:
-            if pid not in posts_to_skip:
-                posts_to_process[pid].add(fileid)
+            posts_to_process[pid].add(fileid)
     postcount = len(posts_to_process)
 
     # Generate total count of non-skipped or downloaded files
@@ -149,7 +178,17 @@ def summarize(context: Context, files: FileMap, legacy: bool = False) -> None:
         # Generate `files.csv` with final data about all files found.
         # This includes skipped files since it's useful for diagnosis.
         with files_output_path.open("w", newline="") as f:
-            names = ["fileid", "pids", "url", "url_thumb", "url_file", "path", "new_url", "result"]
+            names = [
+                "fileid",
+                "pids",
+                "url",
+                "url_thumb",
+                "url_file",
+                "path",
+                "new_url",
+                "result",
+                "thumb_result",
+            ]
             files_output = csv.writer(f)
             files_output.writerow(names)
             for fileid, file in files.items():
@@ -160,7 +199,18 @@ def summarize(context: Context, files: FileMap, legacy: bool = False) -> None:
                 path = file.path
                 new_url = file.new_url  # for legacy link updates
                 result = file.result.value
-                row = [fileid, pids, url, url_thumb, url_file, path, new_url, result]
+                thumb_result = file.thumb_result.value
+                row = [
+                    fileid,
+                    pids,
+                    url,
+                    url_thumb,
+                    url_file,
+                    path,
+                    new_url,
+                    result,
+                    thumb_result,
+                ]
                 files_output.writerow(row)
                 bar()
 

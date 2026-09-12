@@ -4,7 +4,7 @@ from tests.helpers import write_csv
 from toolbox import download, io, models
 
 
-def test_download_files_updates_results_and_preserves_skipped_files(ctx, monkeypatch):
+def test_download_files_updates_results_and_preserves_skipped_files(ctx, monkeypatch, capsys):
     """The `download_files` function must record successful and failed downloads and preserve files
     already marked as skipped.
     """
@@ -51,6 +51,7 @@ def test_download_files_updates_results_and_preserves_skipped_files(ctx, monkeyp
     assert out["1"].result == models.FileResult.error
     assert out["2"].result == models.FileResult.downloaded
     assert out["3"].result == models.FileResult.skipped
+    assert "Full source unavailable:" in capsys.readouterr().out
 
 
 def test_download_files_uses_uploaded_archive_as_cache(ctx):
@@ -74,8 +75,8 @@ def test_download_files_uses_uploaded_archive_as_cache(ctx):
     assert out["123"].result is models.FileResult.downloaded
 
 
-def test_download_files_requires_thumbnail_success_for_file_success(ctx, capsys):
-    """The `download_files` function must not report a file as downloaded when its thumbnail
+def test_download_files_keeps_full_image_when_thumbnail_fails(ctx, capsys):
+    """The `download_files` function must retain a successful full image when its thumbnail
     download fails.
     """
 
@@ -90,12 +91,50 @@ def test_download_files_requires_thumbnail_success_for_file_success(ctx, capsys)
             return 3
 
     ctx.downloader = FakeDownloader()
-
+    full = "https://x/1.jpg"
+    thumb = "https://x/t1.jpg"
     files = {
         "1": models.ForumFile(
             fileid="1",
-            url="https://x/1.jpg",
-            url_thumb="https://x/t1.jpg",
+            url=full,
+            url_thumb=thumb,
+            path="1.jpg",
+            pids={"p1"},
+        )
+    }
+
+    out = download.download_files(ctx, files)
+
+    assert out["1"].result == models.FileResult.downloaded
+    assert out["1"].thumb_result == models.FileResult.error
+    assert [url for url, _path in ctx.downloader.calls] == [full, thumb]
+
+    out_text = capsys.readouterr().out
+    assert "Thumbnail source unavailable (full image retained)" in out_text
+    assert "downloaded 1" in out_text
+
+
+def test_download_files_keeps_thumbnail_when_full_image_fails(ctx, capsys):
+    """The `download_files` function must retain a successful thumbnail when the full-image
+    download fails.
+    """
+
+    class FakeDownloader:
+        def __init__(self):
+            self.calls = []
+
+        def download(self, url, path_new):
+            self.calls.append((url, str(path_new)))
+            return 3 if "/thumb/" in str(path_new) else 0
+
+    ctx.downloader = FakeDownloader()
+    full = "https://x/1.jpg"
+    thumb = "https://x/t1.jpg"
+    files = {
+        "1": models.ForumFile(
+            fileid="1",
+            url=full,
+            url_thumb=thumb,
             path="1.jpg",
             pids={"p1"},
         )
@@ -104,7 +143,49 @@ def test_download_files_requires_thumbnail_success_for_file_success(ctx, capsys)
     out = download.download_files(ctx, files)
 
     assert out["1"].result == models.FileResult.error
-    assert "downloaded 0" in capsys.readouterr().out
+    assert out["1"].thumb_result == models.FileResult.downloaded
+    assert [url for url, _path in ctx.downloader.calls] == [full, thumb]
+
+    out_text = capsys.readouterr().out
+    assert "Full source unavailable (thumbnail retained)" in out_text
+    assert "downloaded 1" in out_text
+
+
+def test_download_files_reports_unrecoverable_when_full_and_thumbnail_fail(ctx, capsys):
+    """The `download_files` function must report media as unrecoverable when both full-image and
+    thumbnail downloads fail.
+    """
+
+    class FakeDownloader:
+        def __init__(self):
+            self.calls = []
+
+        def download(self, url, path_new):
+            self.calls.append((url, str(path_new)))
+            return 0
+
+    ctx.downloader = FakeDownloader()
+    full = "https://x/1.jpg"
+    thumb = "https://x/t1.jpg"
+    files = {
+        "1": models.ForumFile(
+            fileid="1",
+            url=full,
+            url_thumb=thumb,
+            path="1.jpg",
+            pids={"p1"},
+        )
+    }
+
+    out = download.download_files(ctx, files)
+
+    assert out["1"].result == models.FileResult.error
+    assert out["1"].thumb_result == models.FileResult.error
+    assert [url for url, _path in ctx.downloader.calls] == [full, thumb]
+    assert (
+        "Full and thumbnail sources unavailable; media treated as unrecoverable"
+        in capsys.readouterr().out
+    )
 
 
 def test_download_files_rejects_path_outside_download_directory(ctx):
@@ -186,3 +267,39 @@ def test_summarize_writes_migratable_posts_and_files(ctx):
     files_out = list(io.read_csv(ctx.path.files))
     row = next(r for r in files_out if r["fileid"] == "123")
     assert row["path"] == "123/a.jpg"
+    assert row["thumb_result"] == str(models.FileResult.default.value)
+
+
+def test_summarize_keeps_post_when_another_file_is_migratable(ctx):
+    """The `summarize` function must keep a post when at least one of its referenced files is
+    migratable.
+    """
+    kept = "https://old.example.com/123/a.jpg"
+    skipped_url = "https://old.example.com/999/b.jpg"
+    write_csv(
+        ctx.path.posts_from_export,
+        ["pid", "date", "image_urls", "message"],
+        [["1", "0", repr([kept, skipped_url]), f"<img src='{kept}'><img src='{skipped_url}'>"]],
+    )
+    write_csv(ctx.path.posts_from_api, ["pid", "date", "image_urls", "message"], [])
+    files = {
+        "123": models.ForumFile(
+            fileid="123",
+            url=kept,
+            path="123/a.jpg",
+            pids={"1"},
+            result=models.FileResult.downloaded,
+        ),
+        "999": models.ForumFile(
+            fileid="999",
+            url=skipped_url,
+            path="999/b.jpg",
+            pids={"1"},
+            result=models.FileResult.skipped,
+        ),
+    }
+
+    download.summarize(ctx, files)
+
+    posts_out = list(io.read_csv(ctx.path.posts))
+    assert [row["pid"] for row in posts_out] == ["1"]

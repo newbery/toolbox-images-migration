@@ -45,6 +45,7 @@ class ForumFile:
     path: str = ""
     pids: set[str] = field(default_factory=set)
     result: FileResult = FileResult.default
+    thumb_result: FileResult = FileResult.default
     new_url: str = ""
 
     @classmethod
@@ -59,6 +60,7 @@ class ForumFile:
             path=row.get("path", ""),
             new_url=row["new_url"],
             result=FileResult(int(row["result"])),
+            thumb_result=FileResult(int(row.get("thumb_result", FileResult.default.value))),
         )
 
 
