@@ -13,17 +13,38 @@ from pathlib import Path
 from .cleanup import check_new_urls, check_old_urls
 from .context import Context, alive_bar
 from .io import confirm, linecount, read_csv
-from .models import FileMap, FileResult, ForumFile
-from .urls import get_new_url_func, remove_bad_url
+from .models import FileResult, FilesById, FilesByReference, ForumFile
+from .urls import (
+    fileid_from_url,
+    find_html_references,
+    get_new_url_func,
+    migration_source_url,
+    remove_unrecoverable_file_references,
+    rewrite_html_references,
+)
+
+
+def _load_files(files_path: Path) -> FilesByReference:
+    """Load `files.csv` keyed by every post-reference shape."""
+    files: FilesByReference = {}
+    for row in read_csv(files_path):
+        file = ForumFile.from_csv_row(row)
+        files[file.url] = file
+        if file.url_thumb:
+            files[file.url_thumb] = file
+        if file.url_file:
+            files[file.url_file] = file
+    return files
 
 
 def rewrite_post_content(
     *,
     message: str,
     image_urls: list[str],
-    files: FileMap,
+    files: FilesByReference,
     legacy: bool,
     new_url_func: Callable[[str], str],
+    files_by_id: FilesById | None = None,
 ) -> tuple[str, set[str]]:
     """Rewrite a post message and return (new_message, touched_urls).
 
@@ -33,46 +54,63 @@ def rewrite_post_content(
     new_message = message
     touched_urls: set[str] = set()
 
-    for url in image_urls:
-        try:
-            file = files[url]
-        except KeyError as e:
-            raise KeyError(f"URL referenced in posts.csv not found in files.csv: {url}") from e
-
-        # Updating legacy link
-        if legacy:
+    if legacy:
+        for url in image_urls:
+            try:
+                file = files[url]
+            except KeyError as e:
+                raise KeyError(f"URL referenced in posts.csv not found in files.csv: {url}") from e
             if file.new_url:
                 new_message = new_message.replace(url, file.new_url)
                 touched_urls.add(url)
-            continue
+        return new_message, touched_urls
 
-        # De-link missing file (discovered during download)
-        if file.result is FileResult.error:
-            new_message = remove_bad_url(new_message, url)
-            touched_urls.add(url)
-            continue
+    if files_by_id is None:
+        files_by_id = {file.fileid: file for file in files.values()}
+    references = set(image_urls)
+    references.update(find_html_references(message))
 
-        # Skip files that were skipped during download
+    unrecoverable_fileids: set[str] = set()
+    replacements: dict[str, str] = {}
+    replacement_files: dict[str, str] = {}
+    for reference in sorted(references):
+        file = files.get(reference)
+        if file is None:
+            fileid = fileid_from_url(reference)
+            file = files_by_id.get(fileid) if fileid else None
+        if file is None:
+            continue
         if file.result is FileResult.skipped:
             continue
 
-        # Replace file url with new url
-        new_url = new_url_func(url)
-        new_message = new_message.replace(url, new_url)
-        touched_urls.add(url)
+        source_url = migration_source_url(file, reference)
+        if source_url is None:
+            if file.fileid in unrecoverable_fileids:
+                continue
+            updated = remove_unrecoverable_file_references(new_message, file)
+            if updated != new_message:
+                new_message = updated
+                touched_urls.add(file.url)
+            unrecoverable_fileids.add(file.fileid)
+            continue
 
-        # Full image links often accompany thumb images
-        if file.url_thumb and url == file.url_thumb:
-            full_url = file.url
-            new_full_url = new_url_func(full_url)
-            new_message = new_message.replace(full_url, new_full_url)
-            touched_urls.add(full_url)
+        replacements[reference] = new_url_func(source_url)
+        replacement_files[reference] = file.url
 
-        # Toolbox sometimes uses a special "/file?id=" link
-        if file.url_file:
-            new_full_url = new_url_func(file.url)
-            new_message = new_message.replace(file.url_file, new_full_url)
-            touched_urls.add(file.url)
+    # HTML parsers expose entity-decoded attribute values. Match using those
+    # semantic values, but rewrite only the src/href value in the original HTML
+    # so unrelated markup is not normalized or reserialized.
+    new_message, matched_attributes = rewrite_html_references(new_message, replacements)
+    for reference in matched_attributes:
+        touched_urls.add(replacement_files[reference])
+
+    # But use a simpler replace for literal URL references outside src/href
+    # attributes. Attribute values already rewritten above no longer contain the
+    # old literal, so this does not rewrite them a second time.
+    for reference, replacement in replacements.items():
+        if reference in new_message:
+            new_message = new_message.replace(reference, replacement)
+            touched_urls.add(replacement_files[reference])
 
     return new_message, touched_urls
 
@@ -80,7 +118,7 @@ def rewrite_post_content(
 def build_update_plan(
     *,
     posts_path: Path,
-    files: FileMap,
+    files: FilesByReference,
     legacy: bool,
     new_url_func: Callable[[str], str],
 ) -> tuple[Path, list[str], set[str]]:
@@ -91,6 +129,7 @@ def build_update_plan(
     """
     sample_pids: list[str] = []
     urls_touched: set[str] = set()
+    files_by_id = {file.fileid: file for file in files.values()}
     temp = tempfile.NamedTemporaryFile
     count = max(0, linecount(posts_path) - 1)
 
@@ -108,6 +147,7 @@ def build_update_plan(
                     files=files,
                     legacy=legacy,
                     new_url_func=new_url_func,
+                    files_by_id=files_by_id,
                 )
 
                 if new_message != row["message"]:
@@ -191,7 +231,7 @@ def apply_update_plan(
 
 def select_files_to_delete(
     *,
-    files: FileMap,
+    files: FilesByReference,
     urls_to_delete: set[str],
     urls_to_keep: set[str],
 ) -> list[ForumFile]:
@@ -226,13 +266,7 @@ def update_posts(context: Context, legacy: bool = False) -> None:
 
     new_url_func = get_new_url_func(old_prefix, thumb_prefix, new_prefix)
 
-    # Load file data from files.csv, keyed by any URLs found in posts.
-    files: FileMap = {}
-    for row in read_csv(files_path):
-        file = ForumFile.from_csv_row(row)
-        files[file.url] = file
-        if file.url_thumb:
-            files[file.url_thumb] = file
+    files = _load_files(files_path)
 
     # If new_urls don't work, abort
     if not check_new_urls(context, files):

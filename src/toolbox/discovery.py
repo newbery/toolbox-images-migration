@@ -9,8 +9,8 @@ from urllib.parse import unquote
 
 from .context import Context, alive_bar
 from .io import linecount, read_csv
-from .models import FileMap, FileResult, ForumFile, Post, PostMap
-from .urls import fileid_from_url, find_legacy_urls, find_urls_func
+from .models import FileResult, FilesById, FilesByReference, ForumFile, Post, PostMap
+from .urls import fileid_from_url, find_html_references, find_legacy_urls, find_urls_func
 
 
 def _relative_download_path(url: str, prefix: str) -> str:
@@ -127,13 +127,28 @@ def posts_from_api(context: Context, posts: PostMap, *, include_thumbnails: bool
     return posts
 
 
+def _post_excludes_files(
+    *, pid: str, date: str, test_post_id: str | None, last_date: datetime
+) -> bool:
+    """Return whether files referenced by one post should be skipped."""
+    if test_post_id and test_post_id != pid:
+        return True
+
+    try:
+        timestamp = int(date)
+        return datetime.fromtimestamp(timestamp, UTC) > last_date
+    except (TypeError, ValueError, OverflowError, OSError):
+        print(f"Bad date for post {pid}: {date!r}")
+        return True
+
+
 def files_from_posts(
     context: Context,
     posts: PostMap,
     *,
     include_thumbnails: bool = True,
     skip_days: int | None = None,
-) -> FileMap:
+) -> FilesById:
     """Collect the file info for the urls found in the posts and tag the
     ones that should be excluded.
 
@@ -153,7 +168,7 @@ def files_from_posts(
     toolbox = ".cloudfront.net/" in prefix
 
     # Generate map of files/images to posts and set of files_to_exclude
-    files: FileMap = {}
+    files: FilesById = {}
     files_to_exclude: set[str] = set()
     for pid, post in posts.items():
         urls = post.image_urls
@@ -171,18 +186,13 @@ def files_from_posts(
             fileids = urls[:]
             pairs = [(url, url) for url in urls]
 
-        if test_post_id and test_post_id != pid:
+        if _post_excludes_files(
+            pid=pid,
+            date=post.date,
+            test_post_id=test_post_id,
+            last_date=last_date,
+        ):
             files_to_exclude.update(fileids)
-        else:
-            try:
-                ts = int(post.date)
-                recent = datetime.fromtimestamp(ts, UTC) > last_date
-            except (TypeError, ValueError, OverflowError, OSError):
-                print(f"Bad date for post {pid}: {post.date!r}")
-                files_to_exclude.update(fileids)
-            else:
-                if recent:
-                    files_to_exclude.update(fileids)
 
         for fileid, url in pairs:
             if fileid in files:
@@ -204,14 +214,55 @@ def files_from_posts(
                     pids={pid},
                 )
 
+    # Add references from posts that did not expose the file via `<img src>`.
+    # This is intentionally a second pass over the local snapshots: `image_urls`
+    # remains the set of images to download, while `pids` records every post that
+    # refers to an already-known migrated file via an image, link, or /file?id= URL.
+    if toolbox and files:
+        references: FilesByReference = {}
+        for file in files.values():
+            for reference in (file.url, file.url_thumb, file.url_file):
+                if reference:
+                    references[reference] = file
+
+        for posts_path in (context.path.posts_from_export, context.path.posts_from_api):
+            if not posts_path.is_file():
+                continue
+            for row in read_csv(posts_path):
+                pid = row["pid"]
+                matched: FilesById = {}
+                for reference in find_html_references(row["message"]):
+                    file = references.get(reference)
+                    if file is None:
+                        fileid = fileid_from_url(reference)
+                        file = files.get(fileid) if fileid else None
+                    if file is not None:
+                        matched[file.fileid] = file
+
+                if not matched:
+                    continue
+
+                for file in matched.values():
+                    file.pids.add(pid)
+
+                if _post_excludes_files(
+                    pid=pid,
+                    date=row["date"],
+                    test_post_id=test_post_id,
+                    last_date=last_date,
+                ):
+                    files_to_exclude.update(matched)
+
     # Tag files to be skipped
     for fileid in files_to_exclude:
         files[fileid].result = FileResult.skipped
+        if files[fileid].url_thumb:
+            files[fileid].thumb_result = FileResult.skipped
 
     return files
 
 
-def files_from_export(context: Context, posts: PostMap) -> FileMap:
+def files_from_export(context: Context, posts: PostMap) -> FilesById:
     """This is a special mode for updating legacy links. In this case, we
     need to collect the image data from the export in order to construct
     the updated urls.
@@ -220,7 +271,7 @@ def files_from_export(context: Context, posts: PostMap) -> FileMap:
     files_input_path = context.path.export_dir / "attachment.csv"
 
     # Generate map of files/images to posts
-    files: FileMap = {}
+    files: FilesById = {}
     for pid, post in posts.items():
         urls = post.image_urls
 

@@ -193,8 +193,9 @@ limits and counts API requests against page-view usage.
 
 ## Supported images and files
 
-Only Website Toolbox-hosted images linked directly from forum post message text
-are managed by the primary migration workflow.
+The migration workflow discovers Website Toolbox-hosted images from forum post
+message text. Once a file is known to the migration, references to that same file
+from full-image links and `/file?id=` links are also updated.
 
 The following are not currently handled by this utility:
 

@@ -65,4 +65,6 @@ class ForumFile:
 
 
 PostMap = dict[str, Post]
-FileMap = dict[str, ForumFile]
+FilesById = dict[str, ForumFile]
+FilesByReference = dict[str, ForumFile]
+FileMap = FilesById

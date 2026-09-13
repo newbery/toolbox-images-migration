@@ -236,6 +236,60 @@ def test_check_new_urls_uses_uploaded_thumbnail_archive_path(ctx, monkeypatch):
     assert cleanup.check_new_urls(ctx, {url_thumb: file}) is True
 
 
+def test_check_new_urls_falls_back_to_full_image_when_thumbnail_failed(ctx):
+    """The `check_new_urls` function must verify the full-image destination when thumbnail
+    migration fails.
+    """
+    full = "https://old.example.com/123/a.jpg"
+    thumb = "https://old.example.com/thumb/123/a.jpg"
+    file = models.ForumFile(
+        fileid="123",
+        url=full,
+        url_thumb=thumb,
+        path="123/a.jpg",
+        result=models.FileResult.downloaded,
+        thumb_result=models.FileResult.error,
+    )
+    write_csv(
+        ctx.path.posts,
+        ["pid", "date", "image_urls", "message"],
+        [["1", "0", repr([thumb]), f"<a href='{full}'><img src='{thumb}'></a>"]],
+    )
+    seen = []
+    ctx.url_ok = lambda url: seen.append(url) or True
+
+    assert cleanup.check_new_urls(ctx, {full: file, thumb: file}) is True
+    assert seen == ["https://new.example.com/123/a.jpg"]
+
+
+def test_check_new_urls_uses_thumbnail_when_full_image_failed(ctx, monkeypatch):
+    """The `check_new_urls` function must verify the thumbnail destination when full-image
+    migration fails.
+    """
+    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    full = "https://old.example.com/123/a.jpg"
+    thumb = "https://old.example.com/thumb/123/a.jpg"
+    write_csv(
+        ctx.path.posts,
+        ["pid", "date", "image_urls", "message"],
+        [["1", "0", repr([thumb]), f"<a href='{full}'><img src='{thumb}'></a>"]],
+    )
+    file = models.ForumFile(
+        fileid="123",
+        url=full,
+        url_thumb=thumb,
+        path="123/a.jpg",
+        result=models.FileResult.error,
+        thumb_result=models.FileResult.downloaded,
+    )
+    files = {full: file, thumb: file}
+    checked = []
+    ctx.url_ok = lambda url: checked.append(url) or True
+
+    assert cleanup.check_new_urls(ctx, files) is True
+    assert checked == ["https://new.example.com/thumb/123/a.jpg"]
+
+
 def test_check_new_urls_skips_unrecoverable_source_pair(ctx, monkeypatch):
     """The `check_new_urls` function must skip destination checks when both
     source variants are unrecoverable.

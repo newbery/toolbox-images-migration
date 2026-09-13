@@ -19,8 +19,13 @@ from plumbum.cmd import cut, grep
 from .context import Context, alive_bar
 from .download import safe_download_path
 from .io import batched, confirm, linecount, read_csv
-from .models import FileMap, FileResult, ForumFile
-from .urls import get_new_url_func
+from .models import FileMap, ForumFile
+from .urls import (
+    fileid_from_url,
+    find_html_references,
+    get_new_url_func,
+    migration_source_url,
+)
 
 
 def delete_files(context: Context) -> None:
@@ -108,12 +113,13 @@ def _uploaded_path_for_url(context: Context, file: ForumFile, url: str) -> Path 
 
 
 def check_new_urls(context: Context, files: FileMap) -> bool:
-    """Check destination URLs referenced by the current ``posts.csv``.
+    """Check destination URLs referenced by the current `posts.csv`.
 
-    A matching file in ``_uploaded_`` is treated as a record that the destination
-    URL was already confirmed by ``archive_downloads``. When no such local record
-    exists, check the destination URL directly. Return False if any required URL
-    cannot be confirmed.
+    A matching file in `_uploaded_` is treated as a record that the destination
+    URL was already confirmed by `archive_downloads`. When no such local record
+    exists, check the destination URL directly. Files with no usable source/local
+    variant need no destination check because their obsolete post references will
+    be removed. Return False if any required destination URL cannot be confirmed.
     """
     dry_run = context.dry_run
     old_prefix = context.config.old_url
@@ -122,12 +128,7 @@ def check_new_urls(context: Context, files: FileMap) -> bool:
     posts_path = context.path.posts
     url_ok = context.url_ok
 
-    # Set this to False to generate a list of failing urls.
-    # Make this an environment setting?
-    stop_fast = False
-
-    # The proxy we're using throttles at 2500 req per 10 min.
-    # Make this sleep interval an environment setting?
+    # Keep URL checks slow enough to avoid overwhelming the destination host.
     sleep = 0.001 if dry_run else 0.25
 
     new_url_func = get_new_url_func(old_prefix, thumb_prefix, new_prefix)
@@ -135,37 +136,45 @@ def check_new_urls(context: Context, files: FileMap) -> bool:
     # Confirm all old urls are available at the new location except for files
     # that were skipped or failed during download. Prefer the local _uploaded_
     # archive as evidence so repeated update runs do not recheck known URLs.
-    seen = set()
+    seen: set[str] = set()
     images_errors = set()
+    files_by_id = {file.fileid: file for file in files.values()}
     count = max(0, linecount(posts_path) - 1)
     with alive_bar(count, title="Check new urls") as bar:
         for row in read_csv(posts_path):
-            for url in literal_eval(row["image_urls"]):
-                file = files.get(url)
-                result = file.result if file else FileResult.default
-                if url in seen or result in (FileResult.skipped, FileResult.error):
+            references = set(literal_eval(row["image_urls"]))
+            references.update(find_html_references(row["message"]))
+            for reference in references:
+                file = files.get(reference)
+                if file is None:
+                    fileid = fileid_from_url(reference)
+                    file = files_by_id.get(fileid) if fileid else None
+                if file is None:
                     continue
-                seen.add(url)
+                source_url = migration_source_url(file, reference)
+                if source_url is None:
+                    continue
 
-                if file is not None:
-                    uploaded_path = _uploaded_path_for_url(context, file, url)
-                    if uploaded_path is not None and uploaded_path.exists():
-                        continue
+                if source_url in seen:
+                    continue
+                seen.add(source_url)
 
-                new_url = file.new_url if file and file.new_url else new_url_func(url)
+                uploaded_path = _uploaded_path_for_url(context, file, source_url)
+                if uploaded_path is not None and uploaded_path.exists():
+                    continue
+
+                new_url = file.new_url if file.new_url else new_url_func(source_url)
                 if not url_ok(new_url):
                     images_errors.add(new_url)
-                    if stop_fast:
-                        raise RuntimeError(f"Image not found: {new_url}")
                 time.sleep(sleep)
             bar()
 
     if images_errors:
-        print("Check new urls: !!! Errors attempting to access the following images:")
+        print("Check new urls: !!! Destination unavailable for the following images:")
         for url in sorted(images_errors):
             print(" ", url)
     else:
-        print("Check new urls: Passed; All images are accessible at new urls")
+        print("Check new urls: Passed; All required destination images are accessible")
 
     return not images_errors
 

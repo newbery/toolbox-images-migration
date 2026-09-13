@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.helpers import write_csv
 from toolbox import discovery, io, models
 
 
@@ -91,6 +92,37 @@ def test_files_from_posts_groups_toolbox_images_by_fileid_and_thumbnail(ctx):
     assert f.url_thumb.endswith("/thumb/999/123/a.jpg")
     assert f.pids == {"1", "2"}
     assert f.path == "999/123/a.jpg"
+
+
+def test_files_from_posts_adds_reference_only_posts_to_known_file(ctx):
+    """The `files_from_posts` function must associate reference-only posts
+    with files already discovered from image URLs.
+    """
+    ctx.config.old_url = "https://abc.cloudfront.net/999/"
+    ctx.config.old_url_thumb = "https://abc.cloudfront.net/thumb/999/"
+    ctx.config.skip_days = 0
+
+    full = "https://abc.cloudfront.net/999/123/a.jpg"
+    thumb = "https://abc.cloudfront.net/thumb/999/123/a.jpg"
+    posts = {"1": models.Post(date="0", image_urls=[thumb])}
+
+    write_csv(
+        ctx.path.posts_from_export,
+        ["pid", "date", "image_urls", "message"],
+        [
+            ["1", "0", repr([thumb]), f"<a href='{full}'><img src='{thumb}'></a>"],
+            ["2", "0", "[]", f"<a href='{full}'>full image</a>"],
+        ],
+    )
+    write_csv(
+        ctx.path.posts_from_api,
+        ["pid", "date", "image_urls", "message"],
+        [["3", "0", "[]", "<a href='/file?id=123'>attachment</a>"]],
+    )
+
+    files = discovery.files_from_posts(ctx, posts)
+
+    assert files["123"].pids == {"1", "2", "3"}
 
 
 def test_files_from_posts_skips_recent_posts(ctx):

@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from bs4 import BeautifulSoup, Comment, MarkupResemblesLocatorWarning
 
-from .models import ForumFile
+from .models import FileResult, ForumFile
 
 htmlparser = partial(BeautifulSoup, features="html.parser")
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
@@ -127,6 +127,41 @@ def get_new_url_func(
         return new_prefix + thumb + fixpath(url[prefix:])
 
     return new_url_func
+
+
+def migration_source_url(file: ForumFile, reference: str) -> str | None:
+    """Return the source variant whose migrated destination should replace `reference`.
+
+    Preserve full-size and thumbnail destinations when both variants exist. If
+    exactly one variant is unavailable at the source, use the surviving variant
+    for either reference. Return `None` when no usable source variant exists;
+    callers can then remove the obsolete media reference from the post.
+    """
+    if file.result is FileResult.skipped:
+        return None
+
+    full_ok = file.result is FileResult.downloaded
+    # Older files.csv rows predate thumb_result. In that format a downloaded
+    # full image implied that its known thumbnail was also usable, so preserve
+    # that behavior when the thumbnail state is still default. New download runs
+    # always record an explicit downloaded/error thumbnail result.
+    thumb_ok = bool(file.url_thumb) and (
+        file.thumb_result is FileResult.downloaded
+        or (file.thumb_result is FileResult.default and full_ok)
+    )
+
+    if reference == file.url_thumb:
+        if thumb_ok:
+            return file.url_thumb
+        if full_ok:
+            return file.url
+        return None
+
+    if full_ok:
+        return file.url
+    if thumb_ok:
+        return file.url_thumb
+    return None
 
 
 def find_urls_func(prefix: str | tuple[str, str]) -> Callable[[str], list[str]]:
@@ -266,28 +301,6 @@ def remove_unrecoverable_file_references(text: str, file: ForumFile) -> str:
             changed = True
 
     return html.decode(formatter="html") if changed else text
-
-
-def remove_bad_url(text: str, bad_url: str) -> str:
-    """De-link a bad image and add "missing image" text.
-
-    This is image-specific. Later this will be extended to include support
-    for other types of files.
-    """
-    html = htmlparser(text)
-    for img in html.find_all("img"):
-        if img.get("src", "") == bad_url:
-            notice = html.new_tag("span", attrs={"class": "missing-image"})
-            notice.append("(missing image)")
-            link = img.find_parent("a")
-            badstuff = link or img
-            badstuff.insert_after(
-                " ", notice, Comment(f" Bad URL: {bad_url.replace('https://', '')} ")
-            )
-            if link and link.get("href") == bad_url:
-                link.attrs.pop("href", None)
-            img.attrs.pop("src", None)
-    return html.decode(formatter="html")
 
 
 def noop(x):

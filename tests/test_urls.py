@@ -186,38 +186,3 @@ def test_remove_unrecoverable_file_references_preserves_unrelated_enclosing_link
     assert "<img" not in out
     assert full not in out
     assert "(missing image)" in out
-
-
-def test_remove_bad_url_removes_dead_media_reference_and_adds_notice():
-    """The `remove_bad_url` function must remove dead image and link references and add a visible
-    missing-image notice.
-    """
-    bad = "https://old.example.com/999/missing.jpg"
-    html = f'<p><a href="{bad}"><img src="{bad}"/></a> hello</p>'
-    out = urls.remove_bad_url(html, bad)
-
-    # src and href should be removed
-    assert 'src="' not in out
-    assert 'href="' not in out
-
-    # notice inserted
-    assert "missing-image" in out
-    assert "(missing image)" in out
-
-    # comment includes Bad URL marker
-    assert "Bad URL:" in out
-
-
-def test_remove_bad_url_preserves_unrelated_enclosing_link():
-    """The `remove_bad_url` function must preserve an unrelated enclosing link when removing a
-    missing image.
-    """
-    bad = "https://old.example.com/999/missing.jpg"
-    destination = "https://example.com/page"
-    html = f'<p><a href="{destination}"><img src="{bad}"/></a></p>'
-
-    out = urls.remove_bad_url(html, bad)
-
-    assert f'href="{destination}"' in out
-    assert 'src="' not in out
-    assert "(missing image)" in out

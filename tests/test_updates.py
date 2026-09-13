@@ -12,14 +12,13 @@ def test_rewrite_post_content_preserves_full_and_thumbnail_destinations():
     """
     full = "https://old.example.com/123/a.jpg"
     thumb = "https://old.example.com/thumb/123/a.jpg"
-    downloaded = models.FileResult.downloaded
     file = models.ForumFile(
         fileid="123",
         url=full,
         url_thumb=thumb,
         url_file="/file?id=123",
-        result=downloaded,
-        thumb_result=downloaded,
+        result=models.FileResult.downloaded,
+        thumb_result=models.FileResult.downloaded,
     )
     files = {full: file, thumb: file, file.url_file: file}
     message = f"<a href='{full}'><img src='{thumb}'></a>"
@@ -36,7 +35,37 @@ def test_rewrite_post_content_preserves_full_and_thumbnail_destinations():
 
     assert "href='https://new.example.com/123/a.jpg'" in rewritten
     assert "src='https://new.example.com/thumb/123/a.jpg'" in rewritten
-    assert touched == {full, thumb}
+    assert touched == {full}
+
+
+def test_rewrite_post_content_rewrites_known_reference_not_in_image_urls():
+    """The `rewrite_post_content` function must rewrite known migrated-file
+    references even when they are absent from image discovery.
+    """
+    full = "https://old.example.com/123/a.jpg"
+    file = models.ForumFile(
+        fileid="123",
+        url=full,
+        url_file="/file?id=123",
+        result=models.FileResult.downloaded,
+    )
+    files = {full: file, file.url_file: file}
+    message = f"<a href='{full}'>full</a> <a href='/file?id=123'>file</a>"
+
+    rewritten, touched = updates.rewrite_post_content(
+        message=message,
+        image_urls=[],
+        files=files,
+        legacy=False,
+        new_url_func=lambda url: url.replace(
+            "https://old.example.com/", "https://new.example.com/"
+        ),
+    )
+
+    assert full not in rewritten
+    assert "/file?id=123" not in rewritten
+    assert rewritten.count("https://new.example.com/123/a.jpg") == 2
+    assert touched == {full}
 
 
 def test_rewrite_post_content_preserves_skipped_file():
@@ -58,6 +87,135 @@ def test_rewrite_post_content_preserves_skipped_file():
 
     assert rewritten == message
     assert touched == set()
+
+
+def test_rewrite_post_content_uses_full_image_when_thumbnail_fails():
+    """The `rewrite_post_content` function must fall back to the migrated
+    full image when thumbnail migration fails.
+    """
+    full = "https://old.example.com/123/a.jpg"
+    thumb = "https://old.example.com/thumb/123/a.jpg"
+    file = models.ForumFile(
+        fileid="123",
+        url=full,
+        url_thumb=thumb,
+        result=models.FileResult.downloaded,
+        thumb_result=models.FileResult.error,
+    )
+    files = {full: file, thumb: file}
+    message = f"<a href='{full}'><img src='{thumb}'></a>"
+
+    rewritten, _ = updates.rewrite_post_content(
+        message=message,
+        image_urls=[thumb],
+        files=files,
+        legacy=False,
+        new_url_func=lambda url: url.replace(
+            "https://old.example.com/", "https://new.example.com/"
+        ),
+    )
+
+    assert "href='https://new.example.com/123/a.jpg'" in rewritten
+    assert "src='https://new.example.com/123/a.jpg'" in rewritten
+
+
+def test_rewrite_post_content_uses_thumbnail_when_full_image_fails():
+    """The `rewrite_post_content` function must fall back to the migrated
+    thumbnail when full-image migration fails.
+    """
+    full = "https://old.example.com/123/a.jpg"
+    thumb = "https://old.example.com/thumb/123/a.jpg"
+    file = models.ForumFile(
+        fileid="123",
+        url=full,
+        url_thumb=thumb,
+        url_file="/file?id=123",
+        result=models.FileResult.error,
+        thumb_result=models.FileResult.downloaded,
+    )
+    files = {full: file, thumb: file, file.url_file: file}
+    message = f"<a href='{full}'><img src='{thumb}'></a> <a href='/file?id=123'>file</a>"
+
+    rewritten, touched = updates.rewrite_post_content(
+        message=message,
+        image_urls=[thumb],
+        files=files,
+        legacy=False,
+        new_url_func=lambda url: url.replace(
+            "https://old.example.com/", "https://new.example.com/"
+        ),
+    )
+
+    assert full not in rewritten
+    assert "/file?id=123" not in rewritten
+    assert rewritten.count("https://new.example.com/thumb/123/a.jpg") == 3
+    assert touched == {full}
+
+
+def test_rewrite_post_content_marks_unrecoverable_media_as_missing():
+    """The `rewrite_post_content` function must remove unusable full-image
+    and thumbnail references while preserving visible link text and marking
+    the media as missing.
+    """
+    full = "https://old.example.com/123/a.jpg"
+    thumb = "https://old.example.com/thumb/123/a.jpg"
+    file_url = "/file?id=123"
+    file = models.ForumFile(
+        fileid="123",
+        url=full,
+        url_thumb=thumb,
+        url_file=file_url,
+        result=models.FileResult.error,
+        thumb_result=models.FileResult.error,
+    )
+    files = {full: file, thumb: file, file_url: file}
+    msg = f"<a href='{full}'><img src='{thumb}'></a> <a href='{file_url}'>attachment</a>"
+
+    rewritten, touched = updates.rewrite_post_content(
+        message=msg, image_urls=[thumb], files=files, legacy=False, new_url_func=lambda url: url
+    )
+
+    assert full not in rewritten
+    assert thumb not in rewritten
+    assert file_url not in rewritten
+    assert "<img" not in rewritten
+    assert "<a" not in rewritten
+    assert "missing-image" in rewritten
+    assert "(missing image)" in rewritten
+    assert "attachment" in rewritten
+    assert touched == {full}
+
+
+@pytest.mark.parametrize(
+    "raw_reference",
+    [
+        "https://old.example.com/123/seller&#39;s.jpg",
+        "https://old.example.com/123/seller&#x27;s.jpg",
+        "https://old.example.com/123/seller&apos;s.jpg",
+    ],
+)
+def test_rewrite_post_content_matches_html_encoded_attribute_urls(raw_reference):
+    """The `rewrite_post_content` function must match HTML-entity-encoded
+    attribute URLs semantically.
+    """
+    full = "https://old.example.com/123/seller's.jpg"
+    file = models.ForumFile(
+        fileid="123",
+        url=full,
+        result=models.FileResult.downloaded,
+    )
+
+    rewritten, touched = updates.rewrite_post_content(
+        message=f'<a href="{raw_reference}">image</a>',
+        image_urls=[],
+        files={full: file},
+        legacy=False,
+        new_url_func=lambda url: url.replace("old.example.com", "new.example.com"),
+    )
+
+    assert "old.example.com" not in rewritten
+    assert "new.example.com" in rewritten
+    assert touched == {full}
 
 
 def test_select_files_to_delete_blocks_kept_fileids_and_ignores_non_toolbox_files():
