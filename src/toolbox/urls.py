@@ -2,15 +2,82 @@
 URL discovery, rewriting, and HTML cleanup helpers.
 """
 
+import re
 import warnings
 from collections.abc import Callable
 from functools import partial
+from html import unescape as html_unescape
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from bs4 import BeautifulSoup, Comment, MarkupResemblesLocatorWarning
 
+from .models import ForumFile
+
 htmlparser = partial(BeautifulSoup, features="html.parser")
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
+
+
+_HTML_REFERENCE_TAG_RE = re.compile(
+    r"<(?P<tag>img|a)\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_HTML_REFERENCE_ATTR_RE = re.compile(
+    r"(?P<name>\b(?:src|href))(?P<eq>\s*=\s*)"
+    r"(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'"
+    r"|(?P<unquoted>[^\s\"'=<>`]+))",
+    re.IGNORECASE,
+)
+
+
+def _decoded_reference_attribute(match: re.Match[str]) -> tuple[str, str | None]:
+    """Return the decoded value and quote character for one `src` or `href`."""
+    if match.group("double") is not None:
+        return html_unescape(match.group("double")), '"'
+    if match.group("single") is not None:
+        return html_unescape(match.group("single")), "'"
+    return html_unescape(match.group("unquoted")), None
+
+
+def _encode_reference_attribute(value: str, quote_char: str | None) -> str:
+    """Encode one replacement URL without normalizing unrelated markup."""
+    escaped = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    if quote_char == '"':
+        return f'"{escaped.replace(chr(34), "&quot;")}"'
+    if quote_char == "'":
+        return f"'{escaped.replace(chr(39), '&#39;')}'"
+    if re.search(r"[\s\"'=<>`]", escaped):
+        return f'"{escaped.replace(chr(34), "&quot;")}"'
+    return escaped
+
+
+def rewrite_html_references(text: str, replacements: dict[str, str]) -> tuple[str, set[str]]:
+    """Rewrite matching image/link attributes using HTML-decoded values.
+
+    Attribute values are decoded once for semantic matching, so literal characters
+    and normal HTML entity spellings compare equivalently. Only the matched
+    attribute value is replaced; the rest of the source HTML is preserved exactly.
+    """
+    matched: set[str] = set()
+
+    def rewrite_tag(tag_match: re.Match[str]) -> str:
+        tag_text = tag_match.group(0)
+        tag_name = tag_match.group("tag").lower()
+        wanted_attr = "src" if tag_name == "img" else "href"
+
+        def rewrite_attr(attr_match: re.Match[str]) -> str:
+            if attr_match.group("name").lower() != wanted_attr:
+                return attr_match.group(0)
+            reference, quote_char = _decoded_reference_attribute(attr_match)
+            replacement = replacements.get(reference)
+            if replacement is None:
+                return attr_match.group(0)
+            matched.add(reference)
+            encoded = _encode_reference_attribute(replacement, quote_char)
+            return f"{attr_match.group('name')}{attr_match.group('eq')}{encoded}"
+
+        return _HTML_REFERENCE_ATTR_RE.sub(rewrite_attr, tag_text)
+
+    return _HTML_REFERENCE_TAG_RE.sub(rewrite_tag, text), matched
 
 
 def get_new_url_func(
@@ -82,6 +149,24 @@ def find_urls_func(prefix: str | tuple[str, str]) -> Callable[[str], list[str]]:
     return find_urls
 
 
+def find_html_references(text: str) -> list[str]:
+    """Return decoded URL-like values from image `src` and anchor `href`.
+
+    Normal HTML entity spellings and literal characters therefore produce the same
+    semantic reference without repeatedly unescaping malformed/double-escaped text.
+    """
+    references: set[str] = set()
+    for tag_match in _HTML_REFERENCE_TAG_RE.finditer(text):
+        tag_name = tag_match.group("tag").lower()
+        wanted_attr = "src" if tag_name == "img" else "href"
+        for attr_match in _HTML_REFERENCE_ATTR_RE.finditer(tag_match.group(0)):
+            if attr_match.group("name").lower() != wanted_attr:
+                continue
+            reference, _quote_char = _decoded_reference_attribute(attr_match)
+            references.add(reference)
+    return sorted(references)
+
+
 def find_legacy_urls(text: str) -> list[str]:
     """Return legacy urls found in given html string"""
     html = htmlparser(text)
@@ -148,6 +233,39 @@ def fileid_from_url(url: str) -> str | None:
                 return seg
 
     return None
+
+
+def remove_unrecoverable_file_references(text: str, file: ForumFile) -> str:
+    """Remove obsolete references for a file with no usable migrated source variant.
+
+    Image references become the existing visible `(missing image)` marker.
+    Dead image elements are removed entirely. Links to the same missing file are
+    unwrapped so their visible contents remain without an obsolete `href`.
+    """
+    references = {value for value in (file.url, file.url_thumb, file.url_file) if value}
+    html = htmlparser(text)
+    changed = False
+
+    for img in html.find_all("img"):
+        src = img.get("src")
+        if not isinstance(src, str) or src not in references:
+            continue
+
+        notice = html.new_tag("span", attrs={"class": "missing-image"})
+        notice.append("(missing image)")
+        link = img.find_parent("a")
+        target = link or img
+        target.insert_after(" ", notice, Comment(f" Bad URL: {src.replace('https://', '')} "))
+        img.decompose()
+        changed = True
+
+    for anchor in html.find_all("a"):
+        href = anchor.get("href")
+        if isinstance(href, str) and href in references:
+            anchor.unwrap()
+            changed = True
+
+    return html.decode(formatter="html") if changed else text
 
 
 def remove_bad_url(text: str, bad_url: str) -> str:

@@ -90,6 +90,104 @@ def test_get_new_url_func_quotes_and_unquotes_parameterized_urls():
     assert out2 == "https://new.example.com/a#b.jpg"
 
 
+def test_find_html_references_decodes_entities_only_once():
+    """The `find_html_references` function must decode HTML entities exactly once
+    when extracting references.
+    """
+    html = '<a href="https://old.example.com/123/seller&amp;#39;s.jpg">image</a>'
+
+    assert urls.find_html_references(html) == ["https://old.example.com/123/seller&#39;s.jpg"]
+
+
+@pytest.mark.parametrize(
+    "raw_reference",
+    [
+        "https://old.example.com/123/seller's.jpg",
+        "https://old.example.com/123/seller&#39;s.jpg",
+        "https://old.example.com/123/seller&#x27;s.jpg",
+        "https://old.example.com/123/seller&apos;s.jpg",
+    ],
+)
+def test_rewrite_html_references_matches_equivalent_encoded_values(raw_reference):
+    """The `rewrite_html_references` function must rewrite equivalent literal and
+    HTML-entity-encoded attribute values.
+    """
+    old = "https://old.example.com/123/seller's.jpg"
+    new = "https://new.example.com/123/seller's.jpg"
+    html = f'<a href="{raw_reference}">image</a>'
+
+    rewritten, matched = urls.rewrite_html_references(html, {old: new})
+
+    assert urls.find_html_references(rewritten) == [new]
+    assert matched == {old}
+
+
+def test_rewrite_html_references_preserves_unrelated_markup():
+    """The `rewrite_html_references` function must preserve unrelated markup
+    while rewriting matched attribute values.
+    """
+    old = "https://old.example.com/123/seller's.jpg"
+    new = "https://new.example.com/123/seller's.jpg"
+    html = (
+        '<P data-X="A&amp;B"><a  HREF = "'
+        "https://old.example.com/123/seller&#39;s.jpg"
+        '" class="x">X</a><BR></P>'
+    )
+
+    rewritten, matched = urls.rewrite_html_references(html, {old: new})
+
+    assert rewritten == (
+        '<P data-X="A&amp;B"><a  HREF = "'
+        "https://new.example.com/123/seller's.jpg"
+        '" class="x">X</a><BR></P>'
+    )
+    assert matched == {old}
+
+
+def test_remove_unrecoverable_file_references_removes_dead_media_references():
+    """The `remove_unrecoverable_file_references` function must remove dead
+    image and related attachment references while preserving visible attachment
+    text and marking the missing image.
+    """
+    from toolbox import models
+
+    full = "https://old.example.com/123/a.jpg"
+    thumb = "https://old.example.com/thumb/123/a.jpg"
+    file_url = "/file?id=123"
+    file = models.ForumFile(fileid="123", url=full, url_thumb=thumb, url_file=file_url)
+    html = f'<a href="{full}"><img src="{thumb}"/></a> <a href="{file_url}">attachment</a>'
+
+    out = urls.remove_unrecoverable_file_references(html, file)
+
+    assert full not in out
+    assert thumb not in out
+    assert file_url not in out
+    assert "<img" not in out
+    assert "<a" not in out
+    assert "missing-image" in out
+    assert "(missing image)" in out
+    assert "attachment" in out
+
+
+def test_remove_unrecoverable_file_references_preserves_unrelated_enclosing_link():
+    """The `remove_unrecoverable_file_references` function must preserve
+    an unrelated enclosing link when removing an unrecoverable image.
+    """
+    from toolbox import models
+
+    full = "https://old.example.com/123/a.jpg"
+    unrelated = "https://example.com/page"
+    file = models.ForumFile(fileid="123", url=full)
+    html = f'<a href="{unrelated}"><img src="{full}"/></a>'
+
+    out = urls.remove_unrecoverable_file_references(html, file)
+
+    assert f'<a href="{unrelated}">' in out
+    assert "<img" not in out
+    assert full not in out
+    assert "(missing image)" in out
+
+
 def test_remove_bad_url_removes_dead_media_reference_and_adds_notice():
     """The `remove_bad_url` function must remove dead image and link references and add a visible
     missing-image notice.
