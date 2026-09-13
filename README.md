@@ -1,39 +1,26 @@
-
 # Website Toolbox image migration utility
 
-This project is a small migration utility for forums hosted by
-[Website Toolbox](https://www.websitetoolbox.com/). It downloads images hosted by
-Website Toolbox, rewrites the corresponding image URLs in forum posts, and can
-then delete the migrated images from Website Toolbox storage.
+This project is a migration utility for forums hosted by
+[Website Toolbox](https://www.websitetoolbox.com/). It moves eligible
+Website Toolbox-hosted images to another image host, updates forum posts to use
+the migrated copies, and can then remove the old files from Website Toolbox
+storage.
 
-It is intended for the specific case where a forum is approaching its Website
-Toolbox storage limit. Images/files attached through other Website Toolbox
-features are not handled by this utility; see [Supported images and files](#supported-images-and-files).
+It is intended primarily for forums that are approaching their Website Toolbox
+storage limit.
+
+The utility handles images referenced from forum post content. Files attached
+through other Website Toolbox features are outside the current migration scope;
+see [Supported images and files](#supported-images-and-files).
 
 The Website Toolbox API documentation is available at
 <https://www.websitetoolbox.com/api/#introduction>.
 
 
-## Why use a forum content export?
-
-Each Website Toolbox API request counts toward the account's page-view usage.
-When available, this utility reads `posts.csv` from Website Toolbox's **Forum
-Content Export** before requesting newer or missing posts through the API. The
-export is optional, but using it can substantially reduce API calls and migration
-time.
-
-Note that there appears to be little we can do to optimize the number of API calls
-needed to update each individual post, or the final calls to delete the old images,
-so these last two steps may still generate a lot of page views depending on how
-many posts are updated.
-
-
 ## Requirements
 
 - Python 3.11 or newer
-- Poetry 2.2 or newer
-- The standard Unix utilities used by the migration through Plumbum (`grep`,
-  `cut`, and `wc`)
+- A macOS or unix-like environment with `grep`, `cut`, and `wc`
 
 
 ## Quick start
@@ -43,9 +30,21 @@ many posts are updated.
 git clone https://github.com/newbery/toolbox-images-migration.git
 cd toolbox-images-migration
 
-# 2. Install the project and activate the virtualenv.
-poetry install
-poetry shell
+
+# 2. Install the project and activate the Python environment with your
+#    preferred python package manager; Poetry, uv, Hatch, etc.
+
+  # If using Poetry:
+  #   poetry install
+  #   poetry shell
+
+  # If using uv:
+  #   uv sync
+  #   source .venv/bin/activate
+
+  # If using Hatch:
+  #   hatch shell
+
 
 # 3. Create local configuration files from the templates.
 cp .env.template .env
@@ -53,170 +52,270 @@ cp .env.secrets.template .env.secrets
 
 # 4. Edit .env and .env.secrets for the forum and destination image host.
 
-# 5. Optional: export Forum Content from the Website Toolbox admin portal
-#    (Integrate -> Export) and place posts.csv in EXPORT_DIR (csv/ by default).
+# 5. Optional but recommended: export Forum Content from the Website Toolbox
+#    admin portal (Integrate -> Export) and place posts.csv in EXPORT_DIR
+#    (csv/ by default).
 
-# 6. Exercise the download phase in the default dry-run mode.
+# 6. Preview the download phase using the default dry-run mode.
 toolbox download_files
 
-# 7. Run the complete download phase when ready.
+# 7. Download the migration files.
 toolbox --apply download_files
 
-# 8. Manually copy the contents of DOWNLOAD_DIR/_new_/ to the new image host,
+# 8. Copy the contents of DOWNLOAD_DIR/_new_/ to the new image host,
 #    preserving the directory structure.
 
-# 9. Confirm the uploaded URLs and archive each confirmed local file under
-#    DOWNLOAD_DIR/_uploaded_/. Files that cannot be confirmed remain in _new_.
+# 9. Verify the uploaded files and archive the confirmed local copies.
 toolbox --apply archive_downloads
 
-# 10. Update the forum posts. Files recorded in _uploaded_ do not need another
-#     destination URL check; missing local records fall back to a live URL check.
+# 10. Update forum posts to use the migrated image URLs.
 toolbox --apply update_posts
 
-# 11. Delete the successfully migrated images from Website Toolbox storage.
+# 11. Delete the successfully migrated files from Website Toolbox storage.
 toolbox --apply delete_files
 ```
 
-Run `toolbox --help` for the complete list of modes and safety flags.
+Run `toolbox --help` for the complete list of commands and safety options.
 
 
-## Safety model
+## Migration workflow
 
-Dry-run is the default. Unless explicitly overridden, the utility prevents
-migration mutations, including local archive moves/deletes and remote
-updates/deletes, and limits some collection/download operations to make test
-runs manageable.
+The migration is designed to be run in stages so that each stage can be checked
+before continuing to the next one.
 
-Use `--apply` to perform a full migration operation. Use `--dry-run` to force the
-safe mode even if configuration says otherwise. Destructive operations also have
-additional confirmation and client-layer guards; `--yes` skips interactive
+### 1. Download the files
+
+Run:
+
+```bash
+toolbox --apply download_files
+```
+
+The command collects eligible forum posts, finds Website Toolbox-hosted images,
+and downloads files that still need to be migrated into:
+
+```text
+DOWNLOAD_DIR/_new_/
+```
+
+If a file was already confirmed and archived during an earlier run, it is reused
+rather than downloaded again.
+
+When both a full-size image and a thumbnail are available, they are handled
+independently. If only one can be recovered, the migration can still retain and
+use the surviving copy.
+
+### 2. Upload the files to the new host
+
+Copy the contents of:
+
+```text
+DOWNLOAD_DIR/_new_/
+```
+
+to the destination image host, preserving the directory structure.
+
+This upload step is currently manual.
+
+### 3. Confirm the uploaded files
+
+Run:
+
+```bash
+toolbox --apply archive_downloads
+```
+
+The command checks each file in `_new_` at its expected destination URL. Files
+that are confirmed on the destination host are moved to:
+
+```text
+DOWNLOAD_DIR/_uploaded_/
+```
+
+Files that cannot be confirmed remain in `_new_` so they can be investigated or
+uploaded again.
+
+The `_uploaded_` directory is the local record of files that have been confirmed
+on the destination host. The archive step is safe to rerun.
+
+### 4. Update forum posts
+
+Run:
+
+```bash
+toolbox --apply update_posts
+```
+
+The command updates eligible forum posts to use the migrated files.
+
+The migration recognizes the currently known ways a migrated file may be
+referenced in post HTML, including image and thumbnail URLs, links to the file,
+and `/file?id=...` references. Equivalent HTML-encoded URL forms are handled as
+the same reference.
+
+If only the full image or only the thumbnail was successfully migrated, post
+references can fall back to the surviving copy.
+
+A matching file under `_uploaded_` is treated as confirmation that the
+destination file exists. If that local confirmation is unavailable, the command
+can check the destination URL directly.
+
+### 5. Delete the old Website Toolbox files
+
+Run:
+
+```bash
+toolbox --apply delete_files
+```
+
+After the post updates have succeeded, this command removes the corresponding
+old files from Website Toolbox storage.
+
+Because this is the destructive final stage, run it only after reviewing the
+results of the previous steps.
+
+
+## Why use a forum content export?
+
+Each Website Toolbox API request counts toward the account's page-view usage.
+
+When `EXPORT_DIR/posts.csv` is available, the utility reads that Forum Content
+Export first and uses the API only for newer or missing posts. For a large forum,
+this can substantially reduce API usage and migration time.
+
+To create the export, use **Integrate -> Export** in the Website Toolbox admin
+portal and place `posts.csv` in `EXPORT_DIR` (`csv/` by default).
+
+Updating individual posts and deleting old files still require Website Toolbox
+requests, so those stages can still generate significant page-view usage on a
+large migration.
+
+
+## Dry-run and safety
+
+Dry-run is the default.
+
+Without `--apply`, the utility prevents migration changes such as moving local
+archive files, updating forum posts, and deleting Website Toolbox files. Some
+collection and download work is also limited so that test runs remain
+manageable.
+
+Use:
+
+```bash
+toolbox --apply COMMAND
+```
+
+when you are ready to perform the requested operation.
+
+Use:
+
+```bash
+toolbox --dry-run COMMAND
+```
+
+to force dry-run mode even when configuration says otherwise.
+
+Destructive operations also require confirmation. `--yes` skips interactive
 confirmation when intentionally automating an apply run.
 
-The precedence is:
+Dry-run selection follows this precedence:
 
-1. explicit `--apply` or `--dry-run` CLI flag;
+1. explicit `--apply` or `--dry-run` command-line option;
 2. `DRY_RUN` from `.env`, `.env.secrets`, or the environment;
-3. dry-run if no setting is supplied.
+3. dry-run when no setting is supplied.
 
 
 ## Configuration
 
 The utility reads `.env` and `.env.secrets` from the current working directory.
-Both files should be created from the checked-in templates:
+
+Create both files from the checked-in templates:
 
 ```bash
 cp .env.template .env
 cp .env.secrets.template .env.secrets
 ```
 
-`.env` contains ordinary migration settings such as local directories, source
-URLs, destination URL, and age/test controls. `.env.secrets` contains the
-Website Toolbox credentials and should remain untracked.
+Use `.env` for ordinary migration settings such as local directories, source
+URLs, destination URL, and test controls.
 
-Any setting can be overridden by an environment variable prefixed with
-`TOOLBOX_`. For example, `TOOLBOX_DRY_RUN=false` overrides `DRY_RUN` from the env
-files. In dry-run mode, `NEW_URL` may be an existing local directory; migrated
-image checks will use `file://` URLs instead of requiring a public image host.
+Use `.env.secrets` for Website Toolbox credentials. This file should remain
+untracked.
+
+Any setting can also be supplied through an environment variable prefixed with
+`TOOLBOX_`. For example:
+
+```text
+TOOLBOX_DRY_RUN=false
+```
+
+overrides `DRY_RUN` from the env files.
+
+For local testing in dry-run mode, `NEW_URL` may point to an existing local
+directory. Destination checks will then use `file://` URLs instead of requiring a
+public image host.
 
 
-### Authentication settings
+### Authentication
 
-`API_KEY` is available in the forum Admin UI under **Integrate -> API**.
+`API_KEY` is available in the Website Toolbox admin UI under
+**Integrate -> API**.
 
 `API_USERNAME` should name a Website Toolbox user with administrator privileges.
 
-`ADMIN_COOKIE` is the browser cookie from an authenticated Website Toolbox admin
+`ADMIN_COOKIE` is taken from an authenticated Website Toolbox admin browser
 session. The utility only needs the relevant authentication cookie values, but
-copying the complete cookie string is acceptable. A minimal value looks like:
+copying the complete cookie string is acceptable.
+
+For example, at a minimum, the cookie value would look something like:
 
 ```dotenv
 ADMIN_COOKIE="username=aaa; wtsession=123456789abcdefghij; forumuserid=123456"
 ```
 
 
-## Main migration modes
-
-
-### `download_files`
-
-- checks the configured API authentication;
-- collects posts from `EXPORT_DIR/posts.csv` when available;
-- collects remaining posts through the Website Toolbox API;
-- downloads Website Toolbox-hosted images from eligible posts into
-  `DOWNLOAD_DIR/_new_/`;
-- reuses matching files already recorded under `DOWNLOAD_DIR/_uploaded_/` rather
-  than downloading them again;
-- writes the resulting image/file data and the post-update inputs.
-
-
-### `archive_downloads`
-
-- checks every image under `DOWNLOAD_DIR/_new_/` at its expected URL on the new
-  image host;
-- in dry-run mode, reports what would be archived without changing local files;
-- with `--apply`, moves each confirmed file to the same relative path under
-  `DOWNLOAD_DIR/_uploaded_/`;
-- ignores `.DS_Store` files during URL checks and removes them with `--apply`;
-- removes empty directories left under `_new_` after confirmed files are archived;
-- leaves unconfirmed files or local archive conflicts in `_new_`;
-- lists any image files remaining in `_new_` when the operation completes.
-
-The `_uploaded_` directory is therefore the local record that an image was
-confirmed on the destination host. The archive operation is safe to rerun. If an
-identical destination file already exists in `_uploaded_`, the duplicate in
-`_new_` is removed; if the files differ, the new copy is left in place and
-reported as a conflict.
-
-
-### `update_posts`
-
-- treats a matching file in `_uploaded_` as prior confirmation that the migrated
-  image URL exists;
-- checks the actual destination URL as a fallback when there is no matching local
-  `_uploaded_` record, including when using an older `files.csv` that lacks the
-  newer `path` field;
-- builds/uses the update plan;
-- updates eligible post messages with the new image URLs in apply mode.
-
-
-### `delete_files`
-
-- uses the successful migration results to identify old Website Toolbox files;
-- deletes those files only in apply mode and subject to the command's safety
-  checks.
-
-Additional diagnostic/legacy modes are exposed by `toolbox --help`.
-
-API requests are intentionally throttled because Website Toolbox enforces request
-limits and counts API requests against page-view usage.
-
-
 ## Supported images and files
 
-The migration workflow discovers Website Toolbox-hosted images from forum post
-message text. Once a file is known to the migration, references to that same file
-from full-image links and `/file?id=` links are also updated.
+The migration discovers Website Toolbox-hosted images referenced from forum post
+content and updates the currently known reference forms for those files.
 
-The following are not currently handled by this utility:
+It does not currently migrate files belonging to these other Website Toolbox
+features:
 
-- images/files included as post attachments;
-- private-message images/files;
-- album images/files;
-- event images/files;
+- post attachments;
+- private messages;
+- albums;
+- events;
 - profile pictures;
 - profile avatars.
+
+
+## Operational notes
+
+Website Toolbox API requests are intentionally throttled. Large migrations,
+especially the post-update and file-deletion stages, can therefore take some
+time.
+
+Additional diagnostic and legacy commands are available through:
+
+```bash
+toolbox --help
+```
 
 
 ## Caveats
 
 A small number of images in the original forum were linked directly to the
-Website Toolbox backend instead of through the CloudFront CDN. Those cases were
-originally handled manually because there were too few to justify expanding the
-migration logic. For a new migration, consider searching the content export for
-URLs such as:
+Website Toolbox backend instead of through the CloudFront CDN. Those exceptional
+cases were handled manually because there were too few to justify expanding the
+migration at the time.
+
+For a new migration, consider searching the forum content export for URLs such
+as:
 
 ```text
 https://s3.amazonaws.com/files.websitetoolbox.com/...
 ```
 
-and deciding whether to correct those exceptional posts before the main run.
+and deciding whether to correct those posts before running the main migration.
