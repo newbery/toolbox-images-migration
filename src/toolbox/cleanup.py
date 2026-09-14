@@ -14,6 +14,7 @@ from contextlib import suppress
 from pathlib import Path
 from urllib.parse import quote
 
+import requests
 from plumbum.cmd import cut, grep
 
 from .context import Context, alive_bar
@@ -211,16 +212,16 @@ def archive_downloads(context: Context) -> None:
     """Confirm newly uploaded images at the destination and archive local copies.
 
     Each file in `_new_` is checked independently. A confirmed file is moved to
-    the same relative path under `_uploaded_` only in apply mode. Missing URLs
+    the same relative path under `_uploaded_` only in apply mode. Failed checks
     and local destination conflicts remain in `_new_` and are listed when the
-    operation completes. Finder `.DS_Store` files are ignored for URL checks
-    and removed in apply mode.
+    operation completes or is interrupted. Finder `.DS_Store` files are ignored
+    for URL checks and removed in apply mode.
     """
     dry_run = context.dry_run
     download_dir = Path(context.path.download_dir)
     new_dir = download_dir / "_new_"
     uploaded_dir = download_dir / "_uploaded_"
-    url_ok = context.url_ok
+    url_status = context.url_status
 
     if dry_run:
         print("Archive downloads: Dry run; no local files will be moved or deleted")
@@ -230,57 +231,84 @@ def archive_downloads(context: Context) -> None:
         print(f"Archive downloads: No image files under {new_dir}")
         return
 
+    total = len(files)
     archived = 0
-    missing: list[tuple[str, str]] = []
+    checked = 0
+    found = 0
+    failures: list[tuple[str, str, str]] = []
     conflicts: list[str] = []
+    interrupted = False
     sleep = 0.001 if dry_run else 0.25
 
-    with alive_bar(len(files), title="Archive downloads") as bar:
-        for src_path, rel in files:
-            new_url = _new_url_for_download_path(context, rel)
-            if not url_ok(new_url):
-                missing.append((rel, new_url))
+    print(f"Archive downloads: Checking {total} files under {new_dir}")
+
+    try:
+        with alive_bar(total, title="Archive downloads") as bar:
+            for src_path, rel in files:
+                new_url = _new_url_for_download_path(context, rel)
+                try:
+                    status = url_status(new_url)
+                except requests.RequestException as exc:
+                    checked += 1
+                    detail = type(exc).__name__
+                    if str(exc):
+                        detail = f"{detail}: {exc}"
+                    failures.append((rel, new_url, detail))
+                else:
+                    checked += 1
+                    if status not in (200, 206):
+                        failures.append((rel, new_url, f"HTTP {status}"))
+                    else:
+                        found += 1
+
+                        dst_path = safe_download_path(uploaded_dir, rel)
+                        if dst_path.exists():
+                            if filecmp.cmp(src_path, dst_path, shallow=False):
+                                if not dry_run:
+                                    src_path.unlink()
+                                archived += 1
+                            else:
+                                conflicts.append(rel)
+                        else:
+                            if not dry_run:
+                                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.move(src_path, dst_path)
+                            archived += 1
+
+                bar.text = f"{checked}/{total} checked; {found} found; {len(failures)} failed"
                 bar()
                 time.sleep(sleep)
-                continue
-
-            dst_path = safe_download_path(uploaded_dir, rel)
-            if dst_path.exists():
-                if filecmp.cmp(src_path, dst_path, shallow=False):
-                    if not dry_run:
-                        src_path.unlink()
-                    archived += 1
-                else:
-                    conflicts.append(rel)
-            else:
-                if not dry_run:
-                    dst_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(src_path, dst_path)
-                archived += 1
-
-            bar()
-            time.sleep(sleep)
+    except KeyboardInterrupt:
+        interrupted = True
 
     if dry_run:
-        remaining = sorted({rel for rel, _url in missing} | set(conflicts))
+        remaining_rels = {rel for rel, _url, _detail in failures} | set(conflicts)
+        if interrupted:
+            remaining_rels.update(rel for _path, rel in files[checked:])
+        remaining = sorted(remaining_rels)
     else:
+        _remove_ds_store_files(new_dir)
+        _remove_empty_directories(new_dir)
         remaining = [rel for _, rel in _iter_download_files(new_dir)]
 
+    unchecked = total - checked
     action = "would archive" if dry_run else "archived"
     remainder = "would remain" if dry_run else "remaining"
-    print(f"Archive downloads: {archived} {action}; {len(remaining)} {remainder} in {new_dir}")
 
-    if missing:
-        print("Not found at new host:")
-        for rel, url in missing:
-            print(f"  {rel}: {url}")
+    if interrupted:
+        print(f"Archive downloads: Interrupted after checking {checked}/{total} files")
+
+    if failures:
+        print("Destination checks failed:")
+        for rel, url, detail in failures:
+            print(f"  {rel}: {detail} {url}")
 
     if conflicts:
         print("Conflicts with existing files in _uploaded_:")
         for rel in conflicts:
             print(" ", rel)
 
-    if remaining:
+    if remaining and not interrupted:
         if dry_run:
             heading = "Files that would remain in _new_:"
         else:
@@ -289,55 +317,14 @@ def archive_downloads(context: Context) -> None:
         for rel in remaining:
             print(" ", rel)
 
-    if not dry_run:
-        _remove_ds_store_files(new_dir)
-        _remove_empty_directories(new_dir)
+    print(
+        f"Archive downloads: {checked} checked; {found} found; "
+        f"{len(failures)} failed; {unchecked} unchecked"
+    )
+    print(f"Archive downloads: {archived} {action}; {len(remaining)} {remainder} in {new_dir}")
 
-
-def check_urls_in_uploaded_folder(context: Context) -> None:
-    """Confirm that archived uploads can still be found at the new image host.
-
-    The relative paths under ``_uploaded_`` are expected to match the destination
-    host paths. Missing files are copied to ``_notfound_`` for manual inspection.
-    """
-    download_dir = Path(context.path.download_dir)
-    uploaded_dir = download_dir / "_uploaded_"
-    notfound_dir = download_dir / "_notfound_"
-    url_ok = context.url_ok
-
-    files = list(_iter_download_files(uploaded_dir))
-    if not files:
-        print(f"Check urls in uploaded folder: No files under {uploaded_dir}")
-        return
-
-    missing = 0
-    first_few_missing: list[str] = []
-
-    with alive_bar(len(files), title="Check uploaded downloads at new host") as bar:
-        for src_path, rel in files:
-            new_url = _new_url_for_download_path(context, rel)
-            if not url_ok(new_url):
-                missing += 1
-                dst = safe_download_path(notfound_dir, rel)
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_path, dst)
-                if len(first_few_missing) < 20:
-                    first_few_missing.append(new_url)
-
-            time.sleep(0.001 if context.dry_run else 0.25)
-            bar()
-
-    checked = len(files)
-    if missing:
-        print(
-            f"Check urls in uploaded folder: {missing}/{checked} missing; copied to: {notfound_dir}"
-        )
-        if first_few_missing:
-            print("First missing urls:")
-            for url in first_few_missing:
-                print(" ", url)
-    else:
-        print(f"Check urls in uploaded folder: Passed; {checked} files found at new host")
+    if interrupted:
+        raise SystemExit(130)
 
 
 def grep_urls_in_file(updates_path: Path, urls: list[str]) -> str:

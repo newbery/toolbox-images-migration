@@ -107,6 +107,7 @@ class Context:
     api_client: "APIClient" = field(init=False, repr=False)
     admin_client: "AdminClient" = field(init=False, repr=False)
     downloader: "Downloader" = field(init=False, repr=False)
+    url_status: Callable[[str], int] = field(init=False, repr=False)
     url_ok: Callable[[str], bool] = field(init=False, repr=False)
 
 
@@ -244,9 +245,13 @@ def init_clients(context: Context, session: requests.Session | None = None) -> C
     context.admin_client = AdminClient(context)
     context.downloader = Downloader(context)
 
-    def url_ok(url: str) -> bool:
-        with session.head(url, allow_redirects=True, timeout=30) as resp:
-            return resp.status_code in (200, 206)
+    def url_status(url: str) -> int:
+        with session.get(url, allow_redirects=True, timeout=30, stream=True) as resp:
+            return resp.status_code
 
+    def url_ok(url: str) -> bool:
+        return url_status(url) in (200, 206)
+
+    context.url_status = url_status
     context.url_ok = url_ok
     return context

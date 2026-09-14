@@ -183,9 +183,9 @@ def test_init_context_rejects_local_new_url_in_apply_mode(tmp_path, monkeypatch,
         context.init_context(models.CliArgs(mode="download_files", apply=True))
 
 
-def test_init_clients_configures_session_clients_and_url_helper(ctx, monkeypatch):
-    """The `init_clients` function must configure the session, attach service clients, and install
-    the URL availability helper.
+def test_init_clients_configures_session_clients_and_url_helpers(ctx, monkeypatch):
+    """The `init_clients` function must configure the session, attach
+    service clients, and install URL status helpers.
     """
 
     class FakeResp:
@@ -202,13 +202,13 @@ def test_init_clients_configures_session_clients_and_url_helper(ctx, monkeypatch
         def __init__(self):
             self.mounted = []
             self.headers = {}
-            self.head_calls = []
+            self.get_calls = []
 
         def mount(self, prefix, adapter):
             self.mounted.append((prefix, adapter))
 
-        def head(self, url, allow_redirects=True, timeout=30):
-            self.head_calls.append((url, allow_redirects, timeout))
+        def get(self, url, allow_redirects=True, timeout=30, stream=False):
+            self.get_calls.append((url, allow_redirects, timeout, stream))
             if "partial" in url:
                 return FakeResp(206)
             return FakeResp(200 if "ok" in url else 404)
@@ -246,11 +246,14 @@ def test_init_clients_configures_session_clients_and_url_helper(ctx, monkeypatch
     assert ctx.downloader is dl_obj
     assert created["dl"] is ctx
 
-    # url_ok(): 200/206 => True, other codes => False; head args are fixed
+    assert ctx.url_status("http://nope.example") == 404
+
+    # url_ok(): 200/206 => True, other codes => False; GET is streamed.
     assert ctx.url_ok("http://ok.example") is True
     assert ctx.url_ok("http://partial.example") is True
     assert ctx.url_ok("http://nope.example") is False
-    assert sess.head_calls[0] == ("http://ok.example", True, 30)
+    assert sess.get_calls[0] == ("http://nope.example", True, 30, True)
+    assert all(call[3] is True for call in sess.get_calls)
 
 
 def test_init_clients_creates_session_when_not_provided(ctx, monkeypatch):
@@ -266,7 +269,7 @@ def test_init_clients_creates_session_when_not_provided(ctx, monkeypatch):
         def mount(self, prefix, adapter):
             self.mounted.append((prefix, adapter))
 
-        def head(self, url, allow_redirects=True, timeout=30):
+        def get(self, url, allow_redirects=True, timeout=30, stream=False):
             class R:
                 status_code = 200
 

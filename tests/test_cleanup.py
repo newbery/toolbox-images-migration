@@ -1,5 +1,8 @@
 import json
 
+import pytest
+import requests
+
 from tests.helpers import write_csv
 from toolbox import cleanup, models
 
@@ -10,6 +13,23 @@ def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch,
     """
     ctx.dry_run = False
     monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    progress = []
+
+    class RecordingAliveBar:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __enter__(self):
+            def bar(_n=1):
+                progress.append(bar.text)
+
+            bar.text = ""
+            return bar
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            return False
+
+    monkeypatch.setattr(cleanup, "alive_bar", RecordingAliveBar)
     new_dir = ctx.path.download_dir / "_new_"
     good = new_dir / "123" / "Brother 160 Cambridge.jpg"
     thumb = new_dir / "thumb" / "123" / "Brother 160 Cambridge.jpg"
@@ -20,11 +40,11 @@ def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch,
 
     checked = []
 
-    def url_ok(url):
+    def url_status(url):
         checked.append(url)
-        return not url.endswith("456/missing.jpg")
+        return 404 if url.endswith("456/missing.jpg") else 200
 
-    ctx.url_ok = url_ok
+    ctx.url_status = url_status
     cleanup.archive_downloads(ctx)
 
     uploaded_dir = ctx.path.download_dir / "_uploaded_"
@@ -40,14 +60,95 @@ def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch,
     ]
 
     out = capsys.readouterr().out
+    assert "Checking 3 files" in out
     assert "2 archived; 1 remaining" in out
     assert "456/missing.jpg" in out
+    assert "HTTP 404" in out
     assert "https://new.example.com/456/missing.jpg" in out
+    assert progress == [
+        "1/3 checked; 1 found; 0 failed",
+        "2/3 checked; 1 found; 1 failed",
+        "3/3 checked; 2 found; 1 failed",
+    ]
+    assert "3 checked; 2 found; 1 failed; 0 unchecked" in out
+    assert out.rstrip().splitlines()[-1].startswith("Archive downloads: 2 archived; 1 remaining")
+
+
+def test_archive_downloads_reports_request_exceptions_and_continues(ctx, monkeypatch, capsys):
+    """The `archive_downloads` function must report request failures and
+    continue checking later files.
+    """
+    ctx.dry_run = False
+    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    new_dir = ctx.path.download_dir / "_new_"
+    timed_out = new_dir / "123" / "timeout.jpg"
+    good = new_dir / "456" / "good.jpg"
+    for path in (timed_out, good):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"image")
+
+    def url_status(url):
+        if url.endswith("123/timeout.jpg"):
+            raise requests.ReadTimeout("timed out")
+        return 200
+
+    ctx.url_status = url_status
+    cleanup.archive_downloads(ctx)
+
+    assert timed_out.exists()
+    assert not good.exists()
+    out = capsys.readouterr().out
+    assert "Destination checks failed:" in out
+    assert "123/timeout.jpg: ReadTimeout: timed out" in out
+    assert "2 checked; 1 found; 1 failed; 0 unchecked" in out
+
+
+def test_archive_downloads_ctrl_c_reports_partial_results_and_exits_130(ctx, monkeypatch, capsys):
+    """The `archive_downloads` function must report partial results, exit 130,
+    and suppress a traceback when interrupted.
+    """
+    ctx.dry_run = False
+    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    new_dir = ctx.path.download_dir / "_new_"
+    first = new_dir / "123" / "missing.jpg"
+    second = new_dir / "456" / "unchecked.jpg"
+    third = new_dir / "789" / "also-unchecked.jpg"
+    for path in (first, second, third):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"image")
+
+    calls = 0
+
+    def url_status(_url):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return 404
+        raise KeyboardInterrupt
+
+    ctx.url_status = url_status
+
+    with pytest.raises(SystemExit) as exc_info:
+        cleanup.archive_downloads(ctx)
+
+    assert exc_info.value.code == 130
+    assert first.exists()
+    assert second.exists()
+    assert third.exists()
+    out = capsys.readouterr().out
+    assert "Interrupted after checking 1/3 files" in out
+    assert "Destination checks failed:" in out
+    assert "123/missing.jpg: HTTP 404" in out
+    assert "1 checked; 0 found; 1 failed; 2 unchecked" in out
+    assert "0 archived; 3 remaining" in out
+    assert "456/unchecked.jpg" not in out
+    assert "789/also-unchecked.jpg" not in out
+    assert capsys.readouterr().err == ""
 
 
 def test_archive_downloads_handles_existing_uploaded_files(ctx, monkeypatch, capsys):
-    """The `archive_downloads` function must consume identical archived
-    duplicates and preserve conflicts.
+    """The `archive_downloads` function must consume identical archived duplicates
+    and preserve conflicts.
     """
     ctx.dry_run = False
     monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
@@ -67,7 +168,7 @@ def test_archive_downloads_handles_existing_uploaded_files(ctx, monkeypatch, cap
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
 
-    ctx.url_ok = lambda _url: True
+    ctx.url_status = lambda _url: 200
     cleanup.archive_downloads(ctx)
 
     assert not same_new.exists()
@@ -92,7 +193,7 @@ def test_archive_downloads_dry_run_does_not_change_local_files(ctx, monkeypatch,
     metadata.write_bytes(b"finder")
 
     checked = []
-    ctx.url_ok = lambda url: checked.append(url) or True
+    ctx.url_status = lambda url: checked.append(url) or 200
 
     cleanup.archive_downloads(ctx)
 
@@ -124,7 +225,7 @@ def test_archive_downloads_removes_ds_store_and_empty_directories(ctx, monkeypat
     metadata_only.write_bytes(b"finder")
 
     checked = []
-    ctx.url_ok = lambda url: checked.append(url) or True
+    ctx.url_status = lambda url: checked.append(url) or 200
 
     cleanup.archive_downloads(ctx)
 
