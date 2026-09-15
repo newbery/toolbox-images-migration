@@ -2,11 +2,10 @@
 Verify migrated URLs and remove obsolete Website Toolbox files.
 """
 
+import csv
 import filecmp
 import json
-import re
 import shutil
-import tempfile
 import time
 from ast import literal_eval
 from collections.abc import Iterable, Iterator
@@ -15,15 +14,15 @@ from pathlib import Path
 from urllib.parse import quote
 
 import requests
-from plumbum.cmd import cut, grep
 
 from .context import Context, alive_bar
 from .download import safe_download_path
 from .io import batched, confirm, linecount, read_csv
-from .models import FileMap, ForumFile
+from .models import FileMap, FilesById, ForumFile
 from .urls import (
     fileid_from_url,
     find_html_references,
+    find_post_references,
     get_new_url_func,
     migration_source_url,
 )
@@ -327,93 +326,124 @@ def archive_downloads(context: Context) -> None:
         raise SystemExit(130)
 
 
-def grep_urls_in_file(updates_path: Path, urls: list[str]) -> str:
-    """Given a CSV file `updates_path` and a list of URLs, return the matching
-    post IDs (first CSV field) for rows that contain any of the URLs.
+def _reference_index(files_by_id: FilesById) -> dict[str, tuple[str, str]]:
+    """Return exact old-reference lookup entries keyed by reference text."""
+    result: dict[str, tuple[str, str]] = {}
+    for fileid, file in files_by_id.items():
+        for kind, reference in (
+            ("url", file.url),
+            ("thumb", file.url_thumb),
+            ("file", file.url_file),
+        ):
+            if reference:
+                result[reference] = (fileid, kind)
+    return result
 
-    Equivalent intent to the original:
-        result = (grep["-E", _urls, updates_path] | cut["-d,", "-f1"])(retcode=None)
 
-    but uses fixed-string grep (no regex interpretation), via:
-        grep -F -f <patterns_file> updates.csv | cut -d, -f1
-    """
-    # Drop empties and de-dup
-    seen: set[str] = set()
-    patterns = [u for u in urls if u and not (u in seen or seen.add(u))]
-    if not patterns:
-        return ""
+def _references_in_content(
+    content: str,
+    files_by_id: FilesById,
+    reference_index: dict[str, tuple[str, str]] | None = None,
+) -> list[tuple[str, str, str]]:
+    """Return candidate old references present in one post's content."""
+    if reference_index is None:
+        reference_index = _reference_index(files_by_id)
 
-    pattern_path: Path | None = None
-    try:
-        # Write patterns one-per-line for grep -f
-        with tempfile.NamedTemporaryFile("w", delete=False) as tf:
-            for u in patterns:
-                tf.write(u)
-                tf.write("\n")
-            pattern_path = Path(tf.name)
+    matches: set[tuple[str, str, str]] = set()
+    for reference in find_post_references(content):
+        exact = reference_index.get(reference)
+        if exact is not None:
+            fileid, kind = exact
+            matches.add((fileid, kind, reference))
+            continue
 
-        # grep -F: fixed strings, -f: read patterns from file
-        # Pipe to cut to extract first CSV column (post id)
-        # retcode=None allows grep exit 1 (no matches) without raising
-        return (grep["-F", "-f", str(pattern_path), str(updates_path)] | cut["-d,", "-f1"])(
-            retcode=None
-        )
+        if reference.startswith("/file?id=") or "/file?id=" in reference:
+            fileid = fileid_from_url(reference)
+            if fileid in files_by_id:
+                matches.add((fileid, "fileid-query", reference))
 
-    finally:
-        if pattern_path is not None:
-            try:
-                pattern_path.unlink()
-            except FileNotFoundError:
-                pass
+    return sorted(matches, key=lambda item: (item[0], item[1], item[2]))
+
+
+def _successful_update_pids(updates_path: Path) -> set[str]:
+    """Return post IDs whose latest journal result is successful."""
+    latest = {row["pid"]: row.get("result") for row in read_csv(updates_path)}
+    return {pid for pid, result in latest.items() if result == "success"}
+
+
+def _write_old_reference_failures(
+    path: Path, rows: list[tuple[str, str, str, str, str, str]]
+) -> None:
+    """Write exact surviving old references found by final verification."""
+    with path.open("w", newline="") as output:
+        writer = csv.writer(output)
+        writer.writerow(("state", "source", "pid", "fileid", "kind", "reference"))
+        writer.writerows(rows)
 
 
 def check_old_urls(
     context: Context, files_to_check: Iterable[ForumFile], legacy: bool = False
 ) -> bool:
-    """Check if any old_urls are still found in updated posts (and in posts
-    not updated).
-
-    1) Search 'updates.csv' for any 'url', 'url_thumb', or 'url_file'.
-    2) Search a subset of 'posts_from_export.csv' and 'posts_from_api.csv'
-    that includes only the non-updated posts.
-    3) If any matches are found, print out the list and return False, otherwise
-    return True.
-
-    This is checked after 'update_posts'
-    """
+    """Verify that delete candidates no longer have surviving old references."""
     updates_path = Path(context.path.updates)
     from_export_path = context.path.posts_from_export
     from_api_path = context.path.posts_from_api
     posts_paths = [from_export_path] if legacy else [from_export_path, from_api_path]
+    report_path = context.path.old_reference_failures
+    report_path.unlink(missing_ok=True)
 
-    urls = set()
-    fileids = set()
-    for f in files_to_check:
-        urls.update([f.url, f.url_thumb, f.url_file])
-        fileid = re.escape(f.fileid)
-        fileids.update([rf"={fileid}", rf"/{fileid}/"])
-    urls.discard("")
+    candidate_files = {file.fileid: file for file in files_to_check}
+    reference_index = _reference_index(candidate_files)
 
-    found_in_updated = []
-    found_in_nonupdated = []
-    count = len(urls) + len(fileids)
+    found_in_updated: set[str] = set()
+    found_in_nonupdated: set[str] = set()
+    failures: list[tuple[str, str, str, str, str, str]] = []
 
-    with alive_bar(count, title="Check old urls") as bar:
-        for batch in batched(urls, 100):
-            result = grep_urls_in_file(updates_path, batch)
-            found_in_updated += result.split()
-            bar(len(batch))
+    updated_pids = _successful_update_pids(updates_path)
 
-        for batch in batched(fileids, 10):
-            fileids_ = "|".join(batch)
-            result = (grep["-Eh", fileids_, *posts_paths] | cut["-d,", "-f1"])(retcode=None)
-            found_in_nonupdated += result.split()
-            bar(len(batch))
-        found_in_nonupdated = set(found_in_nonupdated) - set(found_in_updated)
+    source = updates_path.name
+    verification_updates: dict[str, tuple[str, str]] = {
+        row["pid"]: (row.get("content", ""), source) for row in read_csv(updates_path)
+    }
+    update_count = len(verification_updates)
+    source_count = sum(max(0, linecount(path) - 1) for path in posts_paths)
+    with alive_bar(update_count + source_count, title="Check old urls") as bar:
+        for pid, (content, source) in verification_updates.items():
+            matches = _references_in_content(content, candidate_files, reference_index)
+            if matches:
+                found_in_updated.add(pid)
+                failures.extend(
+                    ("updated", source, pid, fileid, kind, reference)
+                    for fileid, kind, reference in matches
+                )
+            bar()
+
+        config = context.config
+        tokens = (config.old_url, config.old_url_thumb, "/file?id=")
+        old_tokens = tuple(token for token in tokens if token)
+
+        for path in posts_paths:
+            for row in read_csv(path):
+                pid = row["pid"]
+                if pid in updated_pids:
+                    bar()
+                    continue
+                content = row.get("message", "")
+                if old_tokens and not any(token in content for token in old_tokens):
+                    bar()
+                    continue
+                matches = _references_in_content(content, candidate_files, reference_index)
+                if matches:
+                    found_in_nonupdated.add(pid)
+                    failures.extend(
+                        ("non-updated", path.name, pid, fileid, kind, reference)
+                        for fileid, kind, reference in matches
+                    )
+                bar()
 
     if found_in_updated:
         print("Check old urls: !!! Old urls found in these updated posts:")
-        for pid in found_in_updated:
+        for pid in sorted(found_in_updated):
             print(f"  {pid}")
 
     if found_in_nonupdated:
@@ -421,4 +451,10 @@ def check_old_urls(
         for pid in sorted(found_in_nonupdated):
             print(f"  {pid}")
 
-    return not bool(found_in_updated or found_in_nonupdated)
+    if failures:
+        failures.sort(key=lambda row: (row[0], row[2], row[3], row[4], row[5], row[1]))
+        _write_old_reference_failures(report_path, failures)
+        print(f"Check old urls: diagnostic report written to: {report_path}")
+        return False
+
+    return True

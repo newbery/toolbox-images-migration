@@ -165,6 +165,11 @@ an interruption. Posts already updated to the same content are skipped, while
 failed or changed updates are tried again. Dry runs use separate preview state and
 do not disturb progress from an apply run.
 
+Before publishing files for deletion, the command verifies that no known old
+Website Toolbox references remain in updated or non-updated posts. If any are
+found, deletion is blocked and the exact references are written to
+`old_reference_failures.csv` for investigation.
+
 ### 5. Delete the old Website Toolbox files
 
 Run:

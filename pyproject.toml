@@ -43,16 +43,12 @@ build-backend = "poetry.core.masonry.api"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-preview = true
 
 [tool.ruff.lint]
-select = ["E", "F", "B", "I", "S", "UP", "RUF", "PT"]
-ignore = [
-    "class-as-data-structure",
-    "line-too-long",
-    "assert",
-]
-unfixable = ["unused-import"]
+select = ["E4", "E7", "E9", "F", "B", "I", "S", "UP", "RUF", "PT"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
 
 [tool.pyright]
 include = ["src"]
@@ -70,7 +66,7 @@ pythonpath = ["src"]
 branch = true
 
 [tool.coverage.report]
-ignore_errors = true
+show_missing = true
 
 [tool.coverage.html]
 directory = "_coverage"

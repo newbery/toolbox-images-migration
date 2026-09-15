@@ -27,6 +27,8 @@ _HTML_REFERENCE_ATTR_RE = re.compile(
     r"|(?P<unquoted>[^\s\"'=<>`]+))",
     re.IGNORECASE,
 )
+_URL_REFERENCE_RE = re.compile(r"https?://[^\s\"'<>]+")
+_FILE_QUERY_REFERENCE_RE = re.compile(r"(?:https?://[^\s\"'<>]*)?/file\?id=\d+")
 
 
 def _decoded_reference_attribute(match: re.Match[str]) -> tuple[str, str | None]:
@@ -199,6 +201,14 @@ def find_html_references(text: str) -> list[str]:
                 continue
             reference, _quote_char = _decoded_reference_attribute(attr_match)
             references.add(reference)
+    return sorted(references)
+
+
+def find_post_references(text: str) -> list[str]:
+    """Return old-reference candidates using the same HTML semantics as rewriting."""
+    references = set(_URL_REFERENCE_RE.findall(text))
+    references.update(_FILE_QUERY_REFERENCE_RE.findall(text))
+    references.update(find_html_references(text))
     return sorted(references)
 
 

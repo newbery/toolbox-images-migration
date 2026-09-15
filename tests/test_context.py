@@ -112,6 +112,7 @@ def test_paths_builds_expected_derived_paths(tmp_path, config_for):
     assert paths.export_dir.name == "export"
     assert paths.posts.name == "posts.csv"
     assert paths.fileids_to_delete.name == "fileids_to_delete.json"
+    assert paths.old_reference_failures.name == "old_reference_failures.csv"
     assert paths.updates_dry_run.name == "updates.dry_run.csv"
     assert paths.legacy_updates.name == "legacy_updates.csv"
     assert paths.legacy_updates_dry_run.name == "legacy_updates.dry_run.csv"

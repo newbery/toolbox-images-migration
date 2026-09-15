@@ -392,11 +392,13 @@ def update_posts(context: Context, legacy: bool = False) -> None:
             print(f"  unique URLs touched: {len(urls_touched)}")
 
             if not legacy:
-                est_fileids = len({
-                    files[url].fileid
-                    for url in urls_touched
-                    if url in files and files[url].url_file
-                })
+                est_fileids = len(
+                    {
+                        files[url].fileid
+                        for url in urls_touched
+                        if url in files and files[url].url_file
+                    }
+                )
                 print(f"  estimated delete candidates (fileids): {est_fileids}")
 
             if not confirm(context, "Type UPDATE to confirm: ", "UPDATE"):

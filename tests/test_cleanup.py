@@ -415,61 +415,29 @@ def test_check_new_urls_skips_unrecoverable_source_pair(ctx, monkeypatch):
     assert checked == []
 
 
-def test_grep_urls_in_file_returns_matching_pids(tmp_path):
-    """The `grep_urls_in_file` function must return PIDs whose content
-    contains any non-empty URL pattern.
+def test_references_in_content_matches_entity_encoded_html_reference():
+    """The `_references_in_content` function must decode HTML entities when
+    matching references.
     """
-    updates = tmp_path / "updates.csv"
-    updates.write_text(
-        "pid,result,content\n"
-        "1,success,hello https://a.example.com/x.jpg\n"
-        "2,success,bye\n"
-        "3,success,see https://b.example.com/y.jpg\n",
-    )
-    out = cleanup.grep_urls_in_file(updates, ["https://b.example.com/y.jpg", ""])
-    assert out.split() == ["3"]
+    full = "https://old.example.com/123/seller's.jpg"
+    files = {"123": models.ForumFile(fileid="123", url=full)}
+    content = '<a href="https://old.example.com/123/seller&#39;s.jpg">image</a>'
 
+    matches = cleanup._references_in_content(content, files)
 
-def test_check_old_urls_detects_references_in_updated_or_nonupdated_posts(ctx, tmp_path):
-    """The `check_old_urls` function must fail verification when old references
-    remain in updated or non-updated posts.
-    """
-    # Create updates.csv (updated posts content)
-    write_csv(
-        ctx.path.updates,
-        ["pid", "result", "content"],
-        [
-            ["10", "success", "contains https://old.example.com/123/a.jpg"],
-            ["11", "success", "ok"],
-        ],
-    )
-    # Create non-updated posts csvs that still contain a fileid pattern
-    write_csv(
-        ctx.path.posts_from_export,
-        ["pid", "date", "image_urls", "message"],
-        [["20", "0", "[]", "legacy =123 somewhere"]],
-    )
-    write_csv(
-        ctx.path.posts_from_api,
-        ["pid", "date", "image_urls", "message"],
-        [["21", "0", "[]", "nope"]],
-    )
-    files_to_check = [
-        models.ForumFile(fileid="123", url="https://old.example.com/123/a.jpg"),
-    ]
-
-    ok = cleanup.check_old_urls(ctx, files_to_check, legacy=False)
-    assert ok is False
+    assert matches == [("123", "url", full)]
 
 
 def test_check_old_urls_detects_url_file_in_updated_post(ctx):
     """The `check_old_urls` function must detect surviving /file?id= references
     in updated content.
     """
+    url = "https://old.example.com/123/a.jpg"
+    url_file = "/file?id=123"
     write_csv(
         ctx.path.updates,
         ["pid", "result", "content"],
-        [["10", "success", "contains /file?id=123"]],
+        [["10", "success", f"contains {url_file}"]],
     )
     write_csv(
         ctx.path.posts_from_export,
@@ -481,44 +449,173 @@ def test_check_old_urls_detects_url_file_in_updated_post(ctx):
         ["pid", "date", "image_urls", "message"],
         [["21", "0", "[]", "no legacy reference"]],
     )
+    files_to_check = [models.ForumFile(fileid="123", url=url, url_file=url_file)]
+
+    assert cleanup.check_old_urls(ctx, files_to_check, legacy=False) is False
+
+
+def test_check_old_urls_excludes_successfully_updated_pids_from_source_snapshots(ctx):
+    """The `check_old_urls` function must ignore old source references for
+    successfully updated posts.
+    """
+    write_csv(
+        ctx.path.updates,
+        ["pid", "result", "content"],
+        [["10", "success", "rewritten content"]],
+    )
+    write_csv(
+        ctx.path.posts_from_export,
+        ["pid", "date", "image_urls", "message"],
+        [["10", "0", "[]", "original reference /file?id=123"]],
+    )
+    write_csv(
+        ctx.path.posts_from_api,
+        ["pid", "date", "image_urls", "message"],
+        [],
+    )
+
+    files_to_check = [
+        models.ForumFile(fileid="123", url="https://old.example.com/123/a.jpg"),
+    ]
+
+    assert cleanup.check_old_urls(ctx, files_to_check) is True
+
+
+def test_check_old_urls_does_not_exclude_failed_update_pids(ctx, capsys):
+    """The `check_old_urls` function must treat failed updates as non-updated
+    source posts.
+    """
+    write_csv(
+        ctx.path.updates,
+        ["pid", "result", "content"],
+        [["10", "fail", "rewritten content"]],
+    )
+    write_csv(
+        ctx.path.posts_from_export,
+        ["pid", "date", "image_urls", "message"],
+        [["10", "0", "[]", "original reference /file?id=123"]],
+    )
+    write_csv(
+        ctx.path.posts_from_api,
+        ["pid", "date", "image_urls", "message"],
+        [],
+    )
+
+    files_to_check = [
+        models.ForumFile(fileid="123", url="https://old.example.com/123/a.jpg"),
+    ]
+
+    assert cleanup.check_old_urls(ctx, files_to_check) is False
+    assert "Old fileids found in these non-updated posts" in capsys.readouterr().out
+
+
+def test_check_old_urls_does_not_treat_destination_fileid_path_as_old_reference(ctx):
+    """The `check_old_urls` function must not treat destination file-ID paths
+    as old references.
+    """
+    write_csv(
+        ctx.path.updates,
+        ["pid", "result", "content"],
+        [["10", "success", "https://new.example.com/123/a.jpg"]],
+    )
+    write_csv(
+        ctx.path.posts_from_export,
+        ["pid", "date", "image_urls", "message"],
+        [["20", "0", "[]", "no legacy reference"]],
+    )
+    write_csv(
+        ctx.path.posts_from_api,
+        ["pid", "date", "image_urls", "message"],
+        [],
+    )
+
+    files_to_check = [
+        models.ForumFile(fileid="123", url="https://old.example.com/123/a.jpg"),
+    ]
+
+    assert cleanup.check_old_urls(ctx, files_to_check) is True
+
+
+def test_check_old_urls_writes_exact_diagnostic_report(ctx, capsys):
+    """The `check_old_urls` function must write exact diagnostics for surviving
+    old references.
+    """
+    write_csv(
+        ctx.path.updates,
+        ["pid", "result", "content"],
+        [["10", "success", '<img src="https://old.example.com/123/a.jpg">']],
+    )
+    write_csv(
+        ctx.path.posts_from_export,
+        ["pid", "date", "image_urls", "message"],
+        [["20", "0", "[]", '<a href="/file?id=456">download</a>']],
+    )
+    write_csv(
+        ctx.path.posts_from_api,
+        ["pid", "date", "image_urls", "message"],
+        [],
+    )
     files_to_check = [
         models.ForumFile(
             fileid="123",
             url="https://old.example.com/123/a.jpg",
             url_file="/file?id=123",
         ),
+        models.ForumFile(
+            fileid="456",
+            url="https://old.example.com/456/b.jpg",
+            url_file="/file?id=456",
+        ),
     ]
 
-    assert cleanup.check_old_urls(ctx, files_to_check, legacy=False) is False
+    assert cleanup.check_old_urls(ctx, files_to_check) is False
+
+    rows = list(cleanup.read_csv(ctx.path.old_reference_failures))
+    assert rows == [
+        {
+            "state": "non-updated",
+            "source": "posts_from_export.csv",
+            "pid": "20",
+            "fileid": "456",
+            "kind": "file",
+            "reference": "/file?id=456",
+        },
+        {
+            "state": "updated",
+            "source": "updates.csv",
+            "pid": "10",
+            "fileid": "123",
+            "kind": "url",
+            "reference": "https://old.example.com/123/a.jpg",
+        },
+    ]
+    assert "diagnostic report written to:" in capsys.readouterr().out
 
 
-def test_check_old_urls_matches_fileids_literally(ctx):
-    """The `check_old_urls` function must treat regex metacharacters in
-    file IDs as literal text.
+def test_check_old_urls_removes_stale_diagnostic_report_on_success(ctx):
+    """The `check_old_urls` function must remove a stale diagnostic report
+    after successful verification.
     """
+    ctx.path.old_reference_failures.write_text("stale")
     write_csv(
         ctx.path.updates,
         ["pid", "result", "content"],
-        [["10", "success", "no legacy reference"]],
+        [["10", "success", "https://new.example.com/123/a.jpg"]],
     )
     write_csv(
         ctx.path.posts_from_export,
         ["pid", "date", "image_urls", "message"],
-        [["20", "0", "[]", "similar but different =12x34 reference"]],
+        [],
     )
     write_csv(
         ctx.path.posts_from_api,
         ["pid", "date", "image_urls", "message"],
-        [["21", "0", "[]", "no legacy reference"]],
+        [],
     )
-    files_to_check = [
-        models.ForumFile(
-            fileid="12.34",
-            url="https://old.example.com/12.34/a.jpg",
-        ),
-    ]
+    files = [models.ForumFile(fileid="123", url="https://old.example.com/123/a.jpg")]
 
-    assert cleanup.check_old_urls(ctx, files_to_check, legacy=False) is True
+    assert cleanup.check_old_urls(ctx, files) is True
+    assert not ctx.path.old_reference_failures.exists()
 
 
 def test_delete_files_batches_candidates_for_admin_client(ctx, monkeypatch):
