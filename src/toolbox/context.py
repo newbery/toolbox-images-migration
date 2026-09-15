@@ -90,6 +90,9 @@ class Paths:
     posts: Path
     files: Path
     updates: Path
+    updates_dry_run: Path
+    legacy_updates: Path
+    legacy_updates_dry_run: Path
     fileids_to_delete: Path
     fileids_to_delete_dry_run: Path
     log: Path
@@ -206,6 +209,9 @@ def paths(config: Config) -> Paths:
         posts=output_dir / "posts.csv",
         files=output_dir / "files.csv",
         updates=output_dir / "updates.csv",
+        updates_dry_run=output_dir / "updates.dry_run.csv",
+        legacy_updates=output_dir / "legacy_updates.csv",
+        legacy_updates_dry_run=output_dir / "legacy_updates.dry_run.csv",
         fileids_to_delete=output_dir / "fileids_to_delete.json",
         fileids_to_delete_dry_run=output_dir / "fileids_to_delete.dry_run.json",
         log=output_dir / "log.txt",

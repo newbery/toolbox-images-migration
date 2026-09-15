@@ -262,102 +262,70 @@ def test_select_files_to_delete_blocks_kept_fileids_and_ignores_non_toolbox_file
 
 
 def test_update_posts_dry_run_writes_preview_and_delete_candidates(ctx, monkeypatch):
-    """The `update_posts` function must write a dry-run preview and deletion
-    candidates without calling the API.
+    """The `update_posts` function must write dry-run previews and delete candidates
+    without calling the API or modifying apply state.
     """
-    # Avoid sleeping
     monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
 
-    # Prepare posts.csv to update
-    msg = (
-        "<p>"
-        "<img src='https://old.example.com/123/a.jpg'/>"
-        "<img src='https://old.example.com/thumb/123/a.jpg'/>"
-        "<a href='/file?id=123'>file</a>"
-        "</p>"
-    )
+    full = "https://old.example.com/123/a.jpg"
+    thumb = "https://old.example.com/thumb/123/a.jpg"
+    skip = "https://old.example.com/555/a.jpg"
+
+    msg = f"<p><img src='{full}'/><img src='{thumb}'/><a href='/file?id=123'>file</a></p>"
+
     write_csv(
         ctx.path.posts,
         ["pid", "date", "image_urls", "message"],
         [
-            [
-                "1",
-                "0",
-                "['https://old.example.com/123/a.jpg', 'https://old.example.com/thumb/123/a.jpg']",
-                msg,
-            ],
-            # This one should be unchanged (skipped file)
-            [
-                "2",
-                "0",
-                "['https://old.example.com/555/a.jpg']",
-                "<img src='https://old.example.com/555/a.jpg'/>",
-            ],
+            ["1", "0", f"['{full}', '{thumb}']", msg],
+            ["2", "0", f"['{skip}']", f"<img src='{skip}'/>"],
         ],
     )
-    # Prepare files.csv input
+
+    downloaded = str(models.FileResult.downloaded.value)
+    skipped = str(models.FileResult.skipped.value)
     write_csv(
         ctx.path.files,
         ["fileid", "pids", "url", "url_thumb", "url_file", "new_url", "result"],
         [
-            [
-                "123",
-                "{'1'}",
-                "https://old.example.com/123/a.jpg",
-                "https://old.example.com/thumb/123/a.jpg",
-                "/file?id=123",
-                "",
-                str(models.FileResult.downloaded.value),
-            ],
-            [
-                "555",
-                "{'2'}",
-                "https://old.example.com/555/a.jpg",
-                "",
-                "",
-                "",
-                str(models.FileResult.skipped.value),
-            ],
+            ["123", "{'1'}", full, thumb, "/file?id=123", "", downloaded],
+            ["555", "{'2'}", skip, "", "", "", skipped],
         ],
     )
 
-    # Patch check_new_urls/check_old_urls
     monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
 
-    # Fake API client: should NOT be called in dry-run mode.
     class FakeClient:
         def update_post(self, _pid, _message):
             raise AssertionError("update_post should not be called in dry-run mode")
 
     ctx.api_client = FakeClient()
+
+    existing_updates = "pid,result,content\n99,success,applied\n"
+    ctx.path.updates.write_text(existing_updates)
+    ctx.path.fileids_to_delete.write_text(json.dumps(["existing"]))
+
     updates.update_posts(ctx, legacy=False)
 
-    # updates.csv should include a dry-run result with rewritten content for pid 1
-    updates_rows = list(io.read_csv(ctx.path.updates))
-    row1 = next(r for r in updates_rows if r["pid"] == "1")
-    assert row1["result"] == "dry_run"
-    assert "https://new.example.com/123/a.jpg" in row1["content"]
-    assert "https://new.example.com/thumb/123/a.jpg" in row1["content"]
+    assert ctx.path.updates.read_text() == existing_updates
+    assert json.loads(ctx.path.fileids_to_delete.read_text()) == ["existing"]
 
-    # /file?id link replaced with full url
-    assert "/file?id=123" not in row1["content"]
+    updates_rows = list(io.read_csv(ctx.path.updates_dry_run))
+    assert [row["pid"] for row in updates_rows] == ["1"]
 
-    # In dry-run mode, fileids_to_delete.json is intentionally left empty,
-    # while the would-delete set is written to fileids_to_delete.dry_run.json.
-    to_delete = ctx.path.fileids_to_delete
-    fileids = json.loads(to_delete.read_text())
-    assert fileids == []
+    row = updates_rows[0]
+    assert row["result"] == "dry_run"
+    assert "https://new.example.com/" in row["content"]
 
-    to_delete_dry_run = ctx.path.fileids_to_delete_dry_run
-    dry_fileids = json.loads(to_delete_dry_run.read_text())
-    assert dry_fileids == ["123"]
+    assert json.loads(ctx.path.fileids_to_delete_dry_run.read_text()) == ["123"]
 
 
-def test_update_posts_clears_stale_delete_handoffs_before_preflight(ctx, monkeypatch):
-    """The `update_posts` function must clear stale delete handoffs before
-    an early preflight return.
+def test_update_posts_dry_run_does_not_mutate_apply_state(ctx, monkeypatch):
+    """The `update_posts` function must leave the apply journal and delete
+    handoff unchanged when a dry-run preflight fails.
     """
+    ctx.path.updates.write_text("pid,result,content\n1,success,applied\n")
     ctx.path.fileids_to_delete.write_text('["stale"]')
     ctx.path.fileids_to_delete_dry_run.write_text('["stale-dry"]')
     write_csv(
@@ -371,8 +339,136 @@ def test_update_posts_clears_stale_delete_handoffs_before_preflight(ctx, monkeyp
     to_delete = ctx.path.fileids_to_delete
     to_delete_dry_run = ctx.path.fileids_to_delete_dry_run
 
-    assert json.loads(to_delete.read_text()) == []
+    assert "1,success,applied" in ctx.path.updates.read_text()
+    assert json.loads(to_delete.read_text()) == ["stale"]
     assert json.loads(to_delete_dry_run.read_text()) == []
+
+
+def _write_simple_update_inputs(ctx, pids=("1",)):
+    post_rows = []
+    file_rows = []
+    result = str(models.FileResult.downloaded.value)
+
+    for pid in pids:
+        fileid = str(100 + int(pid))
+        url = f"https://old.example.com/{fileid}/a.jpg"
+        post_rows.append([pid, "0", repr([url]), f"<img src='{url}'>"])
+        file_rows.append([fileid, repr({pid}), url, "", f"/file?id={fileid}", "", result])
+
+    write_csv(ctx.path.posts, ["pid", "date", "image_urls", "message"], post_rows)
+    write_csv(
+        ctx.path.files,
+        ["fileid", "pids", "url", "url_thumb", "url_file", "new_url", "result"],
+        file_rows,
+    )
+
+
+def _set_apply_mode(ctx):
+    ctx.dry_run = False
+    ctx.args = models.CliArgs(mode="update_posts", apply=True, yes=True)
+
+
+def test_update_posts_apply_rerun_skips_identical_success(ctx, monkeypatch):
+    """The `update_posts` function must reuse an identical successful journal
+    entry and avoid a duplicate API update on rerun.
+    """
+    _set_apply_mode(ctx)
+    _write_simple_update_inputs(ctx)
+    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
+    calls = []
+
+    class FakeClient:
+        def update_post(self, pid, message):
+            calls.append((pid, message))
+            return True
+
+    ctx.api_client = FakeClient()
+
+    updates.update_posts(ctx)
+    updates.update_posts(ctx)
+
+    assert [pid for pid, _message in calls] == ["1"]
+    rows = list(io.read_csv(ctx.path.updates))
+    assert [(row["pid"], row["result"]) for row in rows] == [("1", "success")]
+    assert json.loads(ctx.path.fileids_to_delete.read_text()) == ["101"]
+
+
+def test_update_posts_apply_reapplies_when_target_content_changes(ctx, monkeypatch):
+    """The `update_posts` function must reapply a prior success when its
+    rewritten target content changes.
+    """
+    _set_apply_mode(ctx)
+    _write_simple_update_inputs(ctx)
+    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
+    calls = []
+
+    class FakeClient:
+        def update_post(self, pid, message):
+            calls.append((pid, message))
+            return True
+
+    ctx.api_client = FakeClient()
+
+    updates.update_posts(ctx)
+    ctx.config.new_url = "https://newer.example.com/"
+    updates.update_posts(ctx)
+
+    assert len(calls) == 2
+    assert "https://new.example.com/101/a.jpg" in calls[0][1]
+    assert "https://newer.example.com/101/a.jpg" in calls[1][1]
+    rows = list(io.read_csv(ctx.path.updates))
+    assert [row["result"] for row in rows] == ["success", "success"]
+
+
+def test_update_posts_apply_resumes_after_failure(ctx, monkeypatch):
+    """The `update_posts` function must preserve completed journal entries
+    and resume only unfinished posts after an apply failure.
+    """
+    _set_apply_mode(ctx)
+    _write_simple_update_inputs(ctx, pids=("1", "2"))
+    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
+    first_calls = []
+
+    class InterruptingClient:
+        def update_post(self, pid, message):
+            first_calls.append((pid, message))
+            if pid == "2":
+                raise RuntimeError("simulated interruption")
+            return True
+
+    ctx.api_client = InterruptingClient()
+
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        updates.update_posts(ctx)
+
+    assert [pid for pid, _message in first_calls] == ["1", "2"]
+    assert [(row["pid"], row["result"]) for row in io.read_csv(ctx.path.updates)] == [
+        ("1", "success")
+    ]
+    assert json.loads(ctx.path.fileids_to_delete.read_text()) == []
+
+    resumed_calls = []
+
+    class ResumingClient:
+        def update_post(self, pid, message):
+            resumed_calls.append((pid, message))
+            return True
+
+    ctx.api_client = ResumingClient()
+    updates.update_posts(ctx)
+
+    assert [pid for pid, _message in resumed_calls] == ["2"]
+    assert [(row["pid"], row["result"]) for row in io.read_csv(ctx.path.updates)] == [
+        ("1", "success"),
+        ("2", "success"),
+    ]
+    assert json.loads(ctx.path.fileids_to_delete.read_text()) == ["101", "102"]
 
 
 def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(ctx, monkeypatch):
@@ -382,32 +478,19 @@ def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(ctx, mon
     ctx.dry_run = False
     ctx.args.dry_run = False
     ctx.args.yes = True
+    url = "https://old.example.com/123/a.jpg"
+
     write_csv(
         ctx.path.posts,
         ["pid", "date", "image_urls", "message"],
-        [
-            [
-                "1",
-                "0",
-                "['https://old.example.com/123/a.jpg']",
-                "<img src='https://old.example.com/123/a.jpg'/>",
-            ]
-        ],
+        [["1", "0", f"['{url}']", f"<img src='{url}'/>"]],
     )
+
+    downloaded = str(models.FileResult.downloaded.value)
     write_csv(
         ctx.path.files,
         ["fileid", "pids", "url", "url_thumb", "url_file", "new_url", "result"],
-        [
-            [
-                "123",
-                "{'1'}",
-                "https://old.example.com/123/a.jpg",
-                "",
-                "/file?id=123",
-                "",
-                str(models.FileResult.downloaded.value),
-            ]
-        ],
+        [["123", "{'1'}", url, "", "/file?id=123", "", downloaded]],
     )
     monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: False)
@@ -424,3 +507,50 @@ def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(ctx, mon
 
     to_delete = ctx.path.fileids_to_delete
     assert json.loads(to_delete.read_text()) == []
+
+
+def test_update_posts_legacy_mode_uses_separate_journal_and_preserves_delete_handoff(
+    ctx, monkeypatch
+):
+    """The `update_posts` function in legacy mode must use a separate journal
+    and preserve normal migration state.
+    """
+    ctx.dry_run = False
+    ctx.args = models.CliArgs(mode="update_legacy_links", apply=True, yes=True)
+    ctx.path.updates.write_text("pid,result,content\n99,success,normal migration\n")
+    ctx.path.fileids_to_delete.write_text(json.dumps(["999"]))
+
+    url = "https://old.example.com/101/a.jpg"
+    result = str(models.FileResult.default.value)
+
+    write_csv(
+        ctx.path.posts,
+        ["pid", "date", "image_urls", "message"],
+        [["1", "0", "['/file?id=101']", "<a href='/file?id=101'>file</a>"]],
+    )
+    write_csv(
+        ctx.path.files,
+        ["fileid", "pids", "url", "url_thumb", "url_file", "new_url", "result"],
+        [["101", "{'1'}", "/file?id=101", "", "/file?id=101", url, result]],
+    )
+
+    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
+    calls = []
+
+    class FakeClient:
+        def update_post(self, pid, message):
+            calls.append((pid, message))
+            return True
+
+    ctx.api_client = FakeClient()
+
+    updates.update_posts(ctx, legacy=True)
+    updates.update_posts(ctx, legacy=True)
+
+    assert [pid for pid, _message in calls] == ["1"]
+    assert "normal migration" in ctx.path.updates.read_text()
+    assert json.loads(ctx.path.fileids_to_delete.read_text()) == ["999"]
+    assert [(row["pid"], row["result"]) for row in io.read_csv(ctx.path.legacy_updates)] == [
+        ("1", "success")
+    ]

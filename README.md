@@ -160,6 +160,11 @@ A matching file under `_uploaded_` is treated as confirmation that the
 destination file exists. If that local confirmation is unavailable, the command
 can check the destination URL directly.
 
+Apply runs record successful post updates so the command can be safely rerun after
+an interruption. Posts already updated to the same content are skipped, while
+failed or changed updates are tried again. Dry runs use separate preview state and
+do not disturb progress from an apply run.
+
 ### 5. Delete the old Website Toolbox files
 
 Run:
