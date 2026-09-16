@@ -89,12 +89,21 @@ def parse_args(argv: list[str]) -> CliArgs:
         action="store_true",
         help="Skip interactive confirmations for destructive actions (only relevant with --apply).",
     )
+    parser.add_argument(
+        "--delete-limit",
+        type=int,
+        metavar="N",
+        help="For delete_files only, process at most N file IDs and leave the rest checkpointed.",
+    )
 
     parser.add_argument("mode", choices=list(modes()))
     parsed = parser.parse_args(argv)
+    if parsed.delete_limit is not None and parsed.delete_limit <= 0:
+        parser.error("--delete-limit must be greater than 0")
     return CliArgs(
         mode=parsed.mode,
         apply=parsed.apply,
         dry_run=parsed.dry_run,
         yes=parsed.yes,
+        delete_limit=parsed.delete_limit,
     )

@@ -46,6 +46,7 @@ def _config_for(tmp_path: Path, **changes) -> context.Config:
         "api_key": "key",
         "api_username": "user",
         "admin_cookie": "cookie",
+        "admin_url_sleep": 0.0,
     }
     values.update(changes)
     return context.Config(**values)

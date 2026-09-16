@@ -4,8 +4,8 @@ from toolbox import urls
 
 
 def test_find_urls_func_returns_sorted_unique_matching_urls():
-    """The `find_urls_func` function must return sorted unique URLs that match the configured
-    prefix.
+    """The `find_urls_func` function must return sorted unique URLs that match
+    the configured prefix.
     """
     find_urls = urls.find_urls_func("https://old.example.com/")
     html = (
@@ -20,8 +20,8 @@ def test_find_urls_func_returns_sorted_unique_matching_urls():
 
 
 def test_find_legacy_urls_extracts_attachment_and_hosted_image_references():
-    """The `find_legacy_urls` function must extract legacy attachment links and Website Toolbox
-    hosted-image references while ignoring unrelated URLs.
+    """The `find_legacy_urls` function must extract legacy attachment links
+    and Website Toolbox hosted-image references while ignoring unrelated URLs.
     """
     html = (
         '<a href="/file?id=123">x</a>'
@@ -45,15 +45,15 @@ def test_find_legacy_urls_extracts_attachment_and_hosted_image_references():
     ],
 )
 def test_fileid_from_url_extracts_supported_file_ids(url, expected):
-    """The `fileid_from_url` function must extract file IDs from supported URL forms and return
-    `None` for unrecognized input.
+    """The `fileid_from_url` function must extract file IDs from supported
+    URL forms and return `None` for unrecognized input.
     """
     assert urls.fileid_from_url(url) == expected
 
 
 def test_get_new_url_func_rewrites_full_and_thumbnail_urls():
-    """The `get_new_url_func` function must rewrite full-image and thumbnail URLs to the configured
-    destination prefix.
+    """The `get_new_url_func` function must rewrite full-image and thumbnail
+    URLs to the configured destination prefix.
     """
     f = urls.get_new_url_func(
         old_prefix="https://old.example.com/",
@@ -65,8 +65,9 @@ def test_get_new_url_func_rewrites_full_and_thumbnail_urls():
 
 
 def test_get_new_url_func_quotes_and_unquotes_parameterized_urls():
-    """The `get_new_url_func` function must quote path URLs when embedding them in query parameters
-    and unquote parameter values when converting them back to paths.
+    """The `get_new_url_func` function must quote path URLs when embedding
+    them in query parameters and unquote parameter values when converting
+    them back to paths.
     """
     # Old has no param, new has param -> safe_quote should be used
     f = urls.get_new_url_func(
@@ -91,8 +92,8 @@ def test_get_new_url_func_quotes_and_unquotes_parameterized_urls():
 
 
 def test_find_html_references_decodes_entities_only_once():
-    """The `find_html_references` function must decode HTML entities exactly once
-    when extracting references.
+    """The `find_html_references` function must decode HTML entities exactly
+    once when extracting references.
     """
     html = '<a href="https://old.example.com/123/seller&amp;#39;s.jpg">image</a>'
 
@@ -109,8 +110,8 @@ def test_find_html_references_decodes_entities_only_once():
     ],
 )
 def test_rewrite_html_references_matches_equivalent_encoded_values(raw_reference):
-    """The `rewrite_html_references` function must rewrite equivalent literal and
-    HTML-entity-encoded attribute values.
+    """The `rewrite_html_references` function must rewrite equivalent literal
+    and HTML-entity-encoded attribute values.
     """
     old = "https://old.example.com/123/seller's.jpg"
     new = "https://new.example.com/123/seller's.jpg"

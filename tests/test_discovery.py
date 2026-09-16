@@ -7,8 +7,8 @@ from toolbox import discovery, io, models
 
 
 def test_posts_from_export_extracts_image_urls_and_writes_output(ctx):
-    """The `posts_from_export` function must collect exported posts, extract image URLs, and write
-    the normalized posts output.
+    """The `posts_from_export` function must collect exported posts, extract
+    image URLs, and write the normalized posts output.
     """
     # write export/posts.csv
     posts_csv = ctx.path.export_dir / "posts.csv"
@@ -27,8 +27,8 @@ def test_posts_from_export_extracts_image_urls_and_writes_output(ctx):
 
 
 def test_posts_from_api_adds_new_posts_and_stops_at_existing_pid(ctx):
-    """The `posts_from_api` function must add new API posts, extract image URLs, and stop when it
-    encounters an already-seen post ID.
+    """The `posts_from_api` function must add new API posts, extract image
+    URLs, and stop when it encounters an already-seen post ID.
     """
 
     class FakeApiRequests:
@@ -74,8 +74,9 @@ def test_posts_from_api_adds_new_posts_and_stops_at_existing_pid(ctx):
 
 
 def test_files_from_posts_groups_toolbox_images_by_fileid_and_thumbnail(ctx):
-    """The `files_from_posts` function must group Website Toolbox image URLs by file ID, record
-    full and thumbnail URLs, derive the download path, and accumulate referencing post IDs.
+    """The `files_from_posts` function must group Website Toolbox image URLs
+    by file ID, record full and thumbnail URLs, derive the download path, and
+    accumulate referencing post IDs.
     """
     # Make it look like a toolbox/cloudfront url so toolbox=True
     ctx.config.old_url = "https://abc.cloudfront.net/"
@@ -139,8 +140,8 @@ def test_files_from_posts_skips_recent_posts(ctx):
 
 
 def test_files_from_posts_preserves_references_with_malformed_date(ctx):
-    """The `files_from_posts` function must preserve references from posts with malformed dates and
-    mark their files as skipped.
+    """The `files_from_posts` function must preserve references from posts
+    with malformed dates and mark their files as skipped.
     """
     ctx.config.old_url = "https://abc.cloudfront.net/"
     ctx.config.old_url_thumb = ""
@@ -155,8 +156,8 @@ def test_files_from_posts_preserves_references_with_malformed_date(ctx):
 
 
 def test_files_from_posts_rejects_unsafe_download_path(ctx):
-    """The `files_from_posts` function must reject decoded image paths that escape the download
-    directory.
+    """The `files_from_posts` function must reject decoded image paths that
+    escape the download directory.
     """
     ctx.config.old_url = "https://abc.cloudfront.net/"
     url = "https://abc.cloudfront.net/%2e%2e/123/escape.jpg"
@@ -167,8 +168,8 @@ def test_files_from_posts_rejects_unsafe_download_path(ctx):
 
 
 def test_files_from_export_resolves_file_reference_from_attachment_metadata(ctx):
-    """The `files_from_export` function must use attachment metadata to resolve /file?id=
-    references to concrete file URLs.
+    """The `files_from_export` function must use attachment metadata to resolve
+    /file?id= references to concrete file URLs.
     """
     # Posts with legacy /file?id= urls; attachments.csv supplies filename
     ctx.config.old_url = "https://abc.cloudfront.net/"
@@ -181,8 +182,8 @@ def test_files_from_export_resolves_file_reference_from_attachment_metadata(ctx)
 
 
 def test_files_from_export_duplicate_rows_do_not_hide_missing_metadata(ctx):
-    """The `files_from_export` function must not let duplicate attachment rows hide missing
-    metadata for another file ID.
+    """The `files_from_export` function must not let duplicate attachment rows
+    hide missing metadata for another file ID.
     """
     ctx.config.old_url = "https://abc.cloudfront.net/"
     urls = ["/file?id=123", "/file?id=456"]

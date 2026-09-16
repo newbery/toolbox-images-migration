@@ -10,14 +10,17 @@ import time
 from ast import literal_eval
 from collections.abc import Iterable, Iterator
 from contextlib import suppress
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import quote
 
 import requests
 
+from .clients import DeleteConfirmation
 from .context import Context, alive_bar
 from .download import safe_download_path
-from .io import batched, confirm, linecount, read_csv
+from .io import confirm, linecount, read_csv
 from .models import FileMap, FilesById, ForumFile
 from .urls import (
     fileid_from_url,
@@ -27,59 +30,206 @@ from .urls import (
     migration_source_url,
 )
 
+_DELETE_BATCH_SIZE = 100
+_DELETE_429_MAX_RETRIES = 5
+_DELETE_429_BASE_SLEEP = 30.0
+_DELETE_429_MAX_SLEEP = 300.0
+
+
+def _write_json(path: Path, value: object) -> None:
+    """Atomically replace a JSON checkpoint file."""
+    temp_path = path.with_name(f".{path.name}.tmp")
+    temp_path.write_text(json.dumps(value))
+    temp_path.replace(path)
+
+
+def _retry(error: requests.HTTPError, retry_number: int) -> float:
+    """Return a Retry-After delay or an exponential fallback for HTTP 429."""
+    response = error.response
+    header = response.headers.get("Retry-After") if response is not None else None
+    if header:
+        try:
+            return max(0.0, float(header))
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(header)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=UTC)
+                return max(0.0, (retry_at - datetime.now(UTC)).total_seconds())
+            except (TypeError, ValueError, OverflowError):
+                pass
+
+    return min(_DELETE_429_BASE_SLEEP * (2 ** (retry_number - 1)), _DELETE_429_MAX_SLEEP)
+
+
+def _delete_batch(context: Context, fileids: list[str]) -> DeleteConfirmation:
+    """Delete one batch, retrying HTTP 429 responses with backoff."""
+    client = context.admin_client
+    retry_number = 0
+    while True:
+        try:
+            confirmation = client.delete_files(fileids)
+            print(f"Delete files: Website Toolbox confirmation: {confirmation.message}")
+            return confirmation
+        except requests.HTTPError as error:
+            response = error.response
+            if response is None or response.status_code != 429:
+                raise
+            if retry_number >= _DELETE_429_MAX_RETRIES:
+                raise
+            retry_number += 1
+            delay = _retry(error, retry_number)
+            print(
+                "Delete files: HTTP 429 Too Many Requests; "
+                f"retrying current batch in {delay:g}s "
+                f"({retry_number}/{_DELETE_429_MAX_RETRIES})"
+            )
+            time.sleep(delay)
+
+
+def _write_delete_unresolved(
+    context: Context, batch: list[str], confirmation: DeleteConfirmation
+) -> None:
+    """Record a partial delete confirmation whose surviving IDs are unknown."""
+    value = {
+        "submitted": len(batch),
+        "confirmed_deleted": confirmation.count,
+        "unresolved": len(batch) - confirmation.count,
+        "confirmation": confirmation.message,
+        "fileids": batch,
+    }
+    _write_json(context.path.delete_unresolved, value)
+
 
 def delete_files(context: Context) -> None:
-    """Delete Toolbox images given by set of fileids.
+    """Delete Toolbox files in resumable, rate-limited batches.
 
-    There is no API endpoint for deleting files so this instead uses the
-    Admin UI by simulating the Delete Files form submission.
-
-    This of course won't work with files not hosted by Toolbox so it will
-    throw an error if an attempt to made to do that.
+    There is no API endpoint for deleting files, so this uses the Admin UI by
+    simulating its AJAX Delete Files submission. A batch is checkpointed only
+    when Website Toolbox confirms that every submitted ID was deleted. Partial
+    confirmations leave the entire ambiguous batch pending and write
+    `delete_unresolved.json` for later reconciliation.
     """
-    client = context.admin_client
     deletes_path = context.path.fileids_to_delete
-    fileids_to_delete = json.loads(deletes_path.read_text())
+    remaining = [str(fileid) for fileid in json.loads(deletes_path.read_text())]
+    count = len(remaining)
+    limit = context.args.delete_limit
+    run_count = min(count, limit) if limit is not None else count
+
+    print(f"Delete files: {count} candidates")
+    if limit is not None:
+        print(f"Delete files: limiting this run to {run_count} files")
 
     if context.dry_run:
+        target = remaining[:run_count]
         print("---- Dry Run: would delete the following fileids (no changes made) ----")
-        if not fileids_to_delete:
+        if not target:
             print("(none)")
         else:
-            for fid in fileids_to_delete:
+            for fid in target:
                 print(" ", fid)
+        print(
+            f"Delete files: would submit {run_count} files this run; "
+            f"{count - run_count} would remain"
+        )
         return
 
-    if not fileids_to_delete:
+    if not remaining:
         print("Delete files: no fileids listed; nothing to do.")
+        context.path.delete_unresolved.unlink(missing_ok=True)
         return
 
     if not context.args.yes:
-        preview = ", ".join(str(x) for x in fileids_to_delete[:10])
-        more = "" if len(fileids_to_delete) <= 10 else f"... (+{len(fileids_to_delete) - 10} more)"
-        print(f"About to permanently delete {len(fileids_to_delete)} files from Toolbox.")
+        target = remaining[:run_count]
+        preview = ", ".join(target[:10])
+        more = "" if run_count <= 10 else f"... (+{run_count - 10} more)"
+        print(f"About to permanently delete {run_count} files from Toolbox.")
+        if count > run_count:
+            print(f"An additional {count - run_count} candidates will remain checkpointed.")
         print(f"First 10 fileids: {preview} {more}")
 
-    # A final interactive confirmation helps avoid catastrophic deletes.
     if not confirm(context, "Type DELETE to confirm: ", "DELETE"):
         return
 
-    successes: list[str] = []
-    count = len(fileids_to_delete)
+    submitted = 0
+    confirmed = 0
 
     try:
-        with alive_bar(count, title="Delete files") as bar:
-            for fileids in batched(fileids_to_delete, 100):
-                if not fileids:
-                    continue
-                client.delete_files(fileids)
-                successes.extend(fileids)
-                bar(len(fileids))
-                time.sleep(1.5)
-    finally:
-        print(f"Successfully deleted: {successes}")
+        with alive_bar(run_count, title="Delete files") as bar:
+            while submitted < run_count:
+                batch_size = min(_DELETE_BATCH_SIZE, run_count - submitted)
+                batch = remaining[:batch_size]
+                confirmation = _delete_batch(context, batch)
+                submitted += len(batch)
 
-    print(f"Delete files: {count} deleted")
+                if confirmation.count > len(batch):
+                    raise RuntimeError(
+                        "Website Toolbox confirmed more deletions than were submitted: "
+                        f"{confirmation.count} > {len(batch)}"
+                    )
+
+                confirmed += confirmation.count
+                unresolved = len(batch) - confirmation.count
+                if unresolved:
+                    _write_delete_unresolved(context, batch, confirmation)
+                    print(
+                        "Delete files: partial confirmation; "
+                        f"{len(batch)} submitted, {confirmation.count} confirmed deleted, "
+                        f"{unresolved} unresolved"
+                    )
+                    print(
+                        "Delete files: unresolved IDs cannot be identified from the Admin "
+                        "response; the entire batch remains checkpointed"
+                    )
+                    print(f"Delete files: diagnostic written to {context.path.delete_unresolved}")
+                    print(
+                        f"Delete files: {submitted} submitted; {confirmed} confirmed deleted; "
+                        f"{unresolved} unresolved; {len(remaining)} checkpointed"
+                    )
+                    raise SystemExit(1)
+
+                remaining = remaining[len(batch) :]
+                _write_json(deletes_path, remaining)
+                bar(len(batch))
+    except KeyboardInterrupt:
+        print()
+        print(
+            f"Delete files: interrupted; {submitted} submitted, "
+            f"{confirmed} confirmed deleted; {len(remaining)} remaining"
+        )
+        print(f"Delete files: remaining IDs are checkpointed in {deletes_path}")
+        raise SystemExit(130) from None
+    except requests.HTTPError as error:
+        response = error.response
+        status = response.status_code if response is not None else "unknown"
+        print(
+            f"Delete files: stopped after HTTP {status}: {error}; "
+            f"{submitted} submitted, {confirmed} confirmed deleted"
+        )
+        print(f"Delete files: {len(remaining)} remaining; checkpointed in {deletes_path}")
+        raise SystemExit(1) from None
+    except requests.RequestException as error:
+        print(f"Delete files: request failed: {type(error).__name__}: {error}")
+        print(
+            f"Delete files: {submitted} submitted, {confirmed} confirmed deleted; "
+            f"{len(remaining)} remaining"
+        )
+        print(f"Delete files: remaining IDs are checkpointed in {deletes_path}")
+        raise SystemExit(1) from None
+    except RuntimeError as error:
+        print(f"Delete files: stopped because deletion was not confirmed: {error}")
+        print(
+            f"Delete files: {submitted} submitted, {confirmed} confirmed deleted; "
+            f"{len(remaining)} remaining"
+        )
+        print(f"Delete files: remaining IDs are checkpointed in {deletes_path}")
+        raise SystemExit(1) from None
+
+    context.path.delete_unresolved.unlink(missing_ok=True)
+    print(
+        f"Delete files: {submitted} submitted; {confirmed} confirmed deleted; "
+        f"0 unresolved; {len(remaining)} remaining"
+    )
 
 
 def _new_url_prefix(context: Context) -> str:

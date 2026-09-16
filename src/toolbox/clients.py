@@ -2,12 +2,29 @@
 Website Toolbox HTTP clients.
 """
 
+import re
 import time
+from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from bs4 import BeautifulSoup
+
+_DELETE_CONFIRMATION_RE = re.compile(
+    r"^(?:(?P<count>\d+)\s+files?|the\s+file)\s+"
+    r"(?:has|have)\s+been\s+deleted\.?$",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteConfirmation:
+    """Website Toolbox confirmation for one Admin delete request."""
+
+    message: str
+    count: int
+
 
 if TYPE_CHECKING:
     from .context import Context
@@ -58,6 +75,7 @@ class AdminClient(BaseClient):
         self.dashboard_endpoint = f"{admin_url}/dashboard"
         self.delete_endpoint = f"{admin_url}/mb/uploading"
         self.files_endpoint = f"{admin_url}/mb/uploading/files"
+        self.delay = context.config.admin_url_sleep
         self.headers = {
             "Cookie": context.config.admin_cookie,
             "Referer": self.files_endpoint,
@@ -65,6 +83,7 @@ class AdminClient(BaseClient):
 
     def check_admin_auth(self) -> bool:
         """Check that the Admin cookie in config is valid. If not, return False."""
+        time.sleep(self.delay)
         get = self.context.session.get
         url = self.dashboard_endpoint
         with get(url, headers=self.headers, timeout=30) as resp:
@@ -73,6 +92,7 @@ class AdminClient(BaseClient):
     @cached_property
     def hidden_defaults(self) -> dict[str, str]:
         """Pull hidden defaults from the real page (trail/sort/reverse/loadedUsername)"""
+        time.sleep(self.delay)
         get = self.context.session.get
         url = self.files_endpoint
         with get(url, headers=self.headers, timeout=30) as resp:
@@ -87,15 +107,44 @@ class AdminClient(BaseClient):
                 hidden[i["name"]] = i.get("value", "")
             return hidden
 
-    def delete_files(self, fileids: list[str]) -> bool:
+    def delete_files(self, fileids: list[str]) -> DeleteConfirmation:
+        """Delete files through the current Admin UI AJAX form contract.
+
+        A successful HTTP response is not enough: Website Toolbox can return a
+        normal Files page without performing the deletion. Require the same
+        deletion confirmation message returned by the browser UI before the
+        caller checkpoints the batch.
+        """
         self._require_apply(f"delete_files count={len(fileids)}")
         post = self.context.session.post
         url = self.delete_endpoint
-        defaults = [*self.hidden_defaults.items(), ("action", "deleteFiles")]
-        data = defaults + [("deleteimg", fileid) for fileid in fileids]
-        with post(url, data=data, headers=self.headers, timeout=30) as resp:
+        headers = {**self.headers, "X-Requested-With": "XMLHttpRequest"}
+        data = [
+            *self.hidden_defaults.items(),
+            *(("deleteimg", fileid) for fileid in fileids),
+            ("ajax_request", "1"),
+        ]
+        time.sleep(self.delay)
+        with post(url, data=data, headers=headers, timeout=30) as resp:
             resp.raise_for_status()
-            return resp.ok
+            soup = BeautifulSoup(resp.text, "html.parser")
+            messages = [
+                alert.get_text(" ", strip=True)
+                for alert in soup.select(".alert")
+                if alert.get_text(" ", strip=True)
+            ]
+            for message in messages:
+                match = _DELETE_CONFIRMATION_RE.fullmatch(message)
+                if match is None:
+                    continue
+                count_text = match.group("count")
+                count = int(count_text) if count_text is not None else 1
+                return DeleteConfirmation(message=message, count=count)
+
+            details = messages or ["no alert messages returned"]
+            raise RuntimeError(
+                f"Website Toolbox did not confirm deletion; response messages: {details!r}"
+            )
 
 
 class APIClient(BaseClient):

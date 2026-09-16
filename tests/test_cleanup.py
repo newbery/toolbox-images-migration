@@ -4,7 +4,7 @@ import pytest
 import requests
 
 from tests.helpers import write_csv
-from toolbox import cleanup, models
+from toolbox import cleanup, clients, models
 
 
 def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch, capsys):
@@ -618,31 +618,225 @@ def test_check_old_urls_removes_stale_diagnostic_report_on_success(ctx):
     assert not ctx.path.old_reference_failures.exists()
 
 
-def test_delete_files_batches_candidates_for_admin_client(ctx, monkeypatch):
-    """The `delete_files` function must load deletion candidates and submit
-    them to the Admin client in batches of 100.
-    """
-    ctx.path.fileids_to_delete.write_text(json.dumps([str(i) for i in range(1, 205)]))
-    monkeypatch.setattr(cleanup.time, "sleep", lambda *_a, **_k: None)
+def _http_error(status: int, *, retry_after: str | None = None) -> requests.HTTPError:
+    response = requests.Response()
+    response.status_code = status
+    if retry_after is not None:
+        response.headers["Retry-After"] = retry_after
+    return requests.HTTPError(f"HTTP {status}", response=response)
 
+
+def test_delete_files_checkpoints_each_successful_batch(ctx, capsys):
+    """The `delete_files` function must checkpoint confirmed batches while
+    preserving unconfirmed IDs.
+    """
+    original = [str(i) for i in range(1, 206)]
+    ctx.path.fileids_to_delete.write_text(json.dumps(original))
     calls = []
 
     class FakeAdmin:
-        def check_admin_auth(self):
-            return True
-
         def delete_files(self, fileids):
             calls.append(list(fileids))
+            if len(calls) == 2:
+                raise _http_error(500)
+            return clients.DeleteConfirmation(
+                message=f"{len(fileids)} files have been deleted.", count=len(fileids)
+            )
 
     ctx.admin_client = FakeAdmin()
+    ctx.dry_run = False
+    ctx.args = models.CliArgs(mode="delete_files", apply=True, yes=True)
 
-    # Run in apply mode so the admin client is invoked.
+    with pytest.raises(SystemExit) as error:
+        cleanup.delete_files(ctx)
+
+    assert error.value.code == 1
+    assert calls[0] == original[:100]
+    assert calls[1] == original[100:200]
+    assert json.loads(ctx.path.fileids_to_delete.read_text()) == original[100:]
+    assert "105 remaining; checkpointed" in capsys.readouterr().out
+
+
+def test_delete_files_retries_429_and_honors_retry_after(ctx, monkeypatch, capsys):
+    """The `delete_files` function must retry HTTP 429 responses and honor
+    Retry-After
+    ."""
+    ctx.path.fileids_to_delete.write_text(json.dumps(["1", "2", "3"]))
+    calls = []
+    sleeps = []
+
+    class FakeAdmin:
+        def delete_files(self, fileids):
+            calls.append(list(fileids))
+            if len(calls) == 1:
+                raise _http_error(429, retry_after="7")
+            return clients.DeleteConfirmation(
+                message=f"{len(fileids)} files have been deleted.", count=len(fileids)
+            )
+
+    ctx.admin_client = FakeAdmin()
+    ctx.dry_run = False
+    ctx.args = models.CliArgs(mode="delete_files", apply=True, yes=True)
+    monkeypatch.setattr(cleanup.time, "sleep", sleeps.append)
+
+    cleanup.delete_files(ctx)
+
+    assert calls == [["1", "2", "3"], ["1", "2", "3"]]
+    assert sleeps == [7.0]
+    assert json.loads(ctx.path.fileids_to_delete.read_text()) == []
+    out = capsys.readouterr().out
+    assert "HTTP 429 Too Many Requests" in out
+    assert "3 submitted; 3 confirmed deleted; 0 unresolved; 0 remaining" in out
+
+
+def test_delete_files_interruption_preserves_checkpoint(ctx):
+    """The `delete_files` function must preserve the current and later batches
+    when interrupted.
+    """
+    original = [str(i) for i in range(1, 206)]
+    ctx.path.fileids_to_delete.write_text(json.dumps(original))
+    calls = []
+
+    class FakeAdmin:
+        def delete_files(self, fileids):
+            calls.append(list(fileids))
+            if len(calls) == 2:
+                raise KeyboardInterrupt
+            return clients.DeleteConfirmation(
+                message=f"{len(fileids)} files have been deleted.", count=len(fileids)
+            )
+
+    ctx.admin_client = FakeAdmin()
+    ctx.dry_run = False
+    ctx.args = models.CliArgs(mode="delete_files", apply=True, yes=True)
+
+    with pytest.raises(SystemExit) as error:
+        cleanup.delete_files(ctx)
+
+    assert error.value.code == 130
+    assert json.loads(ctx.path.fileids_to_delete.read_text()) == original[100:]
+
+
+def test_delete_files_dry_run_reports_count(ctx, capsys):
+    """The `delete_files` function must report candidate and submission counts
+    during a dry run.
+    """
+    ctx.path.fileids_to_delete.write_text(json.dumps(["1", "2", "3"]))
+    ctx.dry_run = True
+
+    cleanup.delete_files(ctx)
+
+    out = capsys.readouterr().out
+    assert "Delete files: 3 candidates" in out
+    assert "Delete files: would submit 3 files" in out
+
+
+def test_delete_files_limit_checkpoints_only_requested_ids(ctx, capsys):
+    """The `delete_files` function must honor --delete-limit and preserve the
+    remaining IDs.
+    """
+    original = ["1", "2", "3", "4", "5"]
+    ctx.path.fileids_to_delete.write_text(json.dumps(original))
+    calls = []
+
+    class FakeAdmin:
+        def delete_files(self, fileids):
+            calls.append(list(fileids))
+            return clients.DeleteConfirmation(
+                message=f"{len(fileids)} files have been deleted.", count=len(fileids)
+            )
+
+    ctx.admin_client = FakeAdmin()
+    ctx.dry_run = False
+    ctx.args = models.CliArgs(
+        mode="delete_files",
+        apply=True,
+        yes=True,
+        delete_limit=3,
+    )
+
+    cleanup.delete_files(ctx)
+
+    assert calls == [["1", "2", "3"]]
+    assert json.loads(ctx.path.fileids_to_delete.read_text()) == ["4", "5"]
+    out = capsys.readouterr().out
+    assert "limiting this run to 3 files" in out
+    assert "Website Toolbox confirmation: 3 files have been deleted." in out
+    assert "3 submitted; 3 confirmed deleted; 0 unresolved; 2 remaining" in out
+
+
+def test_delete_files_unconfirmed_response_does_not_checkpoint(ctx, capsys):
+    """The `delete_files` function must keep the current batch pending when
+    deletion is unconfirmed.
+    """
+    original = ["1", "2", "3"]
+    ctx.path.fileids_to_delete.write_text(json.dumps(original))
+
+    class FakeAdmin:
+        def delete_files(self, fileids):
+            raise RuntimeError("Website Toolbox did not confirm deletion")
+
+    ctx.admin_client = FakeAdmin()
+    ctx.dry_run = False
+    ctx.args = models.CliArgs(mode="delete_files", apply=True, yes=True)
+
+    with pytest.raises(SystemExit) as error:
+        cleanup.delete_files(ctx)
+
+    assert error.value.code == 1
+    assert json.loads(ctx.path.fileids_to_delete.read_text()) == original
+    assert "0 submitted, 0 confirmed deleted; 3 remaining" in capsys.readouterr().out
+
+
+def test_delete_files_partial_confirmation_preserves_ambiguous_batch(ctx, capsys):
+    """The `delete_files` function must preserve and report batches with
+    ambiguous partial confirmation.
+    """
+    original = [str(i) for i in range(1, 106)]
+    ctx.path.fileids_to_delete.write_text(json.dumps(original))
+
+    class FakeAdmin:
+        def delete_files(self, fileids):
+            return clients.DeleteConfirmation(message="93 files have been deleted.", count=93)
+
+    ctx.admin_client = FakeAdmin()
+    ctx.dry_run = False
+    ctx.args = models.CliArgs(mode="delete_files", apply=True, yes=True)
+
+    with pytest.raises(SystemExit) as error:
+        cleanup.delete_files(ctx)
+
+    assert error.value.code == 1
+    assert json.loads(ctx.path.fileids_to_delete.read_text()) == original
+    report = json.loads(ctx.path.delete_unresolved.read_text())
+    assert report == {
+        "submitted": 100,
+        "confirmed_deleted": 93,
+        "unresolved": 7,
+        "confirmation": "93 files have been deleted.",
+        "fileids": original[:100],
+    }
+    out = capsys.readouterr().out
+    assert "100 submitted, 93 confirmed deleted, 7 unresolved" in out
+    assert "entire batch remains checkpointed" in out
+    assert "100 submitted; 93 confirmed deleted; 7 unresolved; 105 checkpointed" in out
+
+
+def test_delete_files_success_removes_stale_unresolved_report(ctx):
+    """The `delete_files` function must remove stale unresolved-delete reports
+    after a clean run.
+    """
+    ctx.path.fileids_to_delete.write_text(json.dumps(["1", "2"]))
+    ctx.path.delete_unresolved.write_text("stale")
+
+    class FakeAdmin:
+        def delete_files(self, fileids):
+            return clients.DeleteConfirmation(message="2 files have been deleted.", count=2)
+
+    ctx.admin_client = FakeAdmin()
     ctx.dry_run = False
     ctx.args = models.CliArgs(mode="delete_files", apply=True, yes=True)
 
     cleanup.delete_files(ctx)
-    # Should batch at 100
-    assert len(calls) == 3
-    assert len(calls[0]) == 100
-    assert len(calls[1]) == 100
-    assert len(calls[2]) == 4
+
+    assert not ctx.path.delete_unresolved.exists()

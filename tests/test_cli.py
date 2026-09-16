@@ -6,7 +6,9 @@ from toolbox import cli, models
 
 
 def test_parse_args_accepts_valid_mode(monkeypatch):
-    """The `parse_args` function must accept a valid mode and store it in the parsed arguments."""
+    """The `parse_args` function must accept a valid mode and store it in
+    the parsed arguments.
+    """
     monkeypatch.setattr(cli, "modes", lambda: {"download_files": lambda _ctx: None})
 
     args = cli.parse_args(["download_files"])
@@ -14,7 +16,9 @@ def test_parse_args_accepts_valid_mode(monkeypatch):
 
 
 def test_parse_args_rejects_unknown_mode(monkeypatch):
-    """The `parse_args` function must reject a mode that is not exposed by the CLI."""
+    """The `parse_args` function must reject a mode that is not exposed by
+    the CLI.
+    """
     monkeypatch.setattr(cli, "modes", lambda: {"download_files": lambda _ctx: None})
 
     with pytest.raises(SystemExit):
@@ -22,8 +26,8 @@ def test_parse_args_rejects_unknown_mode(monkeypatch):
 
 
 def test_main_parses_initializes_and_dispatches_selected_mode(monkeypatch):
-    """The `main` function must parse arguments, initialize the context and clients, and dispatch
-    the selected mode exactly once.
+    """The `main` function must parse arguments, initialize the context and
+    clients, and dispatch the selected mode exactly once.
     """
     called = {"parse": 0, "ctx": 0, "init": 0, "mode": 0}
     args_obj = models.CliArgs(mode="download_files")

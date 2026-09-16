@@ -17,6 +17,7 @@ class CliArgs:
     apply: bool = False
     dry_run: bool = False
     yes: bool = False
+    delete_limit: int | None = None
 
 
 @dataclass(slots=True)

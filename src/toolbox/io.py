@@ -7,7 +7,6 @@ import shutil
 import sys
 from collections.abc import Iterator
 from datetime import datetime
-from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -35,15 +34,6 @@ def linecount(path: Path) -> int:
         return 0
     out = wc("-l", str(path))
     return int(out.split()[0])
-
-
-def batched(iterable, n):
-    """Batch iterable into lists of length n. The last batch may be shorter."""
-    if n < 1:
-        raise ValueError("n must be at least one")
-    it = iter(iterable)
-    while batch := list(islice(it, n)):
-        yield batch
 
 
 def read_csv(path: Path) -> Iterator[dict[str, str]]:

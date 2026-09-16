@@ -42,6 +42,7 @@ class Config:
     api_key: str
     api_username: str
     admin_cookie: str
+    admin_url_sleep: float = 5.0
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, str | None]) -> Self:
@@ -75,6 +76,7 @@ class Config:
             api_key=value("api_key"),
             api_username=value("api_username"),
             admin_cookie=value("admin_cookie"),
+            admin_url_sleep=float(value("admin_url_sleep", "5.0")),
         )
 
 
@@ -95,6 +97,7 @@ class Paths:
     legacy_updates_dry_run: Path
     fileids_to_delete: Path
     fileids_to_delete_dry_run: Path
+    delete_unresolved: Path
     old_reference_failures: Path
     log: Path
 
@@ -174,6 +177,8 @@ def validate_config(config: Config, *, dry_run: bool) -> None:
 
     if config.skip_days < 0:
         raise ValueError("SKIP_DAYS must be greater than or equal to 0")
+    if config.admin_url_sleep < 0:
+        raise ValueError("ADMIN_URL_SLEEP must be greater than or equal to 0")
 
 
 def config() -> Config:
@@ -215,6 +220,7 @@ def paths(config: Config) -> Paths:
         legacy_updates_dry_run=output_dir / "legacy_updates.dry_run.csv",
         fileids_to_delete=output_dir / "fileids_to_delete.json",
         fileids_to_delete_dry_run=output_dir / "fileids_to_delete.dry_run.json",
+        delete_unresolved=output_dir / "delete_unresolved.json",
         old_reference_failures=output_dir / "old_reference_failures.csv",
         log=output_dir / "log.txt",
     )

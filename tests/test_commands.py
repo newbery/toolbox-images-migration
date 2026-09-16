@@ -2,8 +2,8 @@ from toolbox import commands
 
 
 def test_mode_download_files_auth_gate(ctx, capsys):
-    """The `mode_download_files` function must stop when API authentication fails and report the
-    failure.
+    """The `mode_download_files` function must stop when API authentication
+    fails and report the failure.
     """
 
     class FakeApi:
@@ -18,8 +18,8 @@ def test_mode_download_files_auth_gate(ctx, capsys):
 
 
 def test_mode_download_files_happy_path_calls_pipeline(ctx, monkeypatch):
-    """The `mode_download_files` function must run the download pipeline in the expected order when
-    the API is available.
+    """The `mode_download_files` function must run the download pipeline in
+    the expected order when the API is available.
     """
 
     class FakeApi:
@@ -54,8 +54,8 @@ def test_mode_download_files_happy_path_calls_pipeline(ctx, monkeypatch):
 
 
 def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ctx, monkeypatch):
-    """The `mode_download_links` function must request link-only discovery without mutating shared
-    configuration.
+    """The `mode_download_links` function must request link-only discovery
+    without mutating shared configuration.
     """
 
     class FakeApi:
@@ -100,8 +100,8 @@ def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ct
 
 
 def test_mode_update_posts_and_delete_files_auth_gate(ctx, capsys):
-    """The update and delete modes must enforce their respective authentication checks before
-    destructive work.
+    """The update and delete modes must enforce their respective authentication
+    checks before destructive work.
     """
 
     class BadApi:
@@ -124,8 +124,8 @@ def test_mode_update_posts_and_delete_files_auth_gate(ctx, capsys):
 
 
 def test_mode_update_legacy_links_calls_expected(ctx, monkeypatch):
-    """The `mode_update_legacy_links` function must run the legacy-link update pipeline without
-    mutating shared configuration.
+    """The `mode_update_legacy_links` function must run the legacy-link update
+    pipeline without mutating shared configuration.
     """
 
     class GoodApi:

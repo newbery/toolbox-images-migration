@@ -6,14 +6,16 @@ from toolbox import context, models
 
 
 def test_config_from_mapping_rejects_missing_required_values():
-    """The `Config.from_mapping` method must reject missing required configuration values."""
+    """The `Config.from_mapping` method must reject missing required
+    configuration values.
+    """
     with pytest.raises(ValueError, match="Missing required config value: EXPORT_DIR"):
         context.Config.from_mapping({})
 
 
 def test_config_loads_sources_with_precedence_and_typed_values(monkeypatch):
-    """The `config` function must merge dotenv and environment sources with the expected precedence
-    and typed values.
+    """The `config` function must merge dotenv and environment sources with
+    the expected precedence and typed values.
     """
 
     def fake_dotenv_values(filename):
@@ -30,6 +32,7 @@ def test_config_loads_sources_with_precedence_and_typed_values(monkeypatch):
                 "SKIP_DAYS": "30",
                 "TEST_POST_ID": "",
                 "DRY_RUN": "true",
+                "ADMIN_URL_SLEEP": "3",
                 "API_USERNAME": "from-env-file",
             }
         if filename == ".env.secrets":
@@ -50,6 +53,7 @@ def test_config_loads_sources_with_precedence_and_typed_values(monkeypatch):
     assert cfg.api_key == "secret-key"
     assert cfg.skip_days == 7
     assert cfg.dry_run is False
+    assert cfg.admin_url_sleep == 3
     assert cfg.export_dir == Path("csv")
     assert cfg.old_url_thumb is None
     assert cfg.test_post_id is None
@@ -69,7 +73,9 @@ def test_config_loads_sources_with_precedence_and_typed_values(monkeypatch):
     ],
 )
 def test_validate_config_requires_complete_migration_config(tmp_path, config_for, changes, name):
-    """The `validate_config` function must require all migration configuration values."""
+    """The `validate_config` function must require all migration configuration
+    values.
+    """
     cfg = config_for(tmp_path, **changes)
 
     with pytest.raises(ValueError, match=f"Missing required config value: {name}"):
@@ -82,11 +88,12 @@ def test_validate_config_requires_complete_migration_config(tmp_path, config_for
         ({"old_url": "https://old.example.com"}, "OLD_URL must end with '/':"),
         ({"new_url": "not-a-url"}, r"NEW_URL must be an absolute http\(s\) URL"),
         ({"skip_days": -1}, "SKIP_DAYS must be greater than or equal to 0"),
+        ({"admin_url_sleep": -1}, "ADMIN_URL_SLEEP must be greater than or equal to 0"),
     ],
 )
 def test_validate_config_rejects_invalid_values(tmp_path, config_for, changes, message):
-    """The `validate_config` function must reject invalid URL and negative numeric configuration
-    values.
+    """The `validate_config` function must reject invalid URL and negative
+    numeric configuration values.
     """
     cfg = config_for(tmp_path, **changes)
 
@@ -95,8 +102,8 @@ def test_validate_config_rejects_invalid_values(tmp_path, config_for, changes, m
 
 
 def test_validate_config_allows_query_url_prefix_without_trailing_slash(tmp_path, config_for):
-    """The `validate_config` function must allow URL prefixes with query parameters without a
-    trailing slash.
+    """The `validate_config` function must allow URL prefixes with query
+    parameters without a trailing slash.
     """
     cfg = config_for(tmp_path, new_url="https://new.example.com/?url=")
 
@@ -112,6 +119,7 @@ def test_paths_builds_expected_derived_paths(tmp_path, config_for):
     assert paths.export_dir.name == "export"
     assert paths.posts.name == "posts.csv"
     assert paths.fileids_to_delete.name == "fileids_to_delete.json"
+    assert paths.delete_unresolved.name == "delete_unresolved.json"
     assert paths.old_reference_failures.name == "old_reference_failures.csv"
     assert paths.updates_dry_run.name == "updates.dry_run.csv"
     assert paths.legacy_updates.name == "legacy_updates.csv"
@@ -121,8 +129,8 @@ def test_paths_builds_expected_derived_paths(tmp_path, config_for):
 def test_init_context_builds_context_using_configured_apply_mode(
     tmp_path, monkeypatch, capsys, config_for
 ):
-    """The `init_context` function must build the runtime context and use configured apply mode by
-    default.
+    """The `init_context` function must build the runtime context and use
+    configured apply mode by default.
     """
     cfg = config_for(tmp_path, dry_run=False)
     monkeypatch.setattr(context, "config", lambda: cfg)
@@ -140,7 +148,9 @@ def test_init_context_builds_context_using_configured_apply_mode(
 def test_init_context_uses_configured_dry_run_and_prints_banner(
     tmp_path, monkeypatch, capsys, config_for
 ):
-    """The `init_context` function must use configured dry-run mode and print the dry-run banner."""
+    """The `init_context` function must use configured dry-run mode and print
+    the dry-run banner.
+    """
     cfg = config_for(tmp_path, dry_run=True)
     monkeypatch.setattr(context, "config", lambda: cfg)
 
@@ -152,7 +162,9 @@ def test_init_context_uses_configured_dry_run_and_prints_banner(
 
 
 def test_init_context_cli_apply_overrides_configured_dry_run(tmp_path, monkeypatch, config_for):
-    """The `init_context` function must let --apply override configured dry-run mode."""
+    """The `init_context` function must let --apply override configured dry-run
+    mode.
+    """
     cfg = config_for(tmp_path, dry_run=True)
     monkeypatch.setattr(context, "config", lambda: cfg)
 
@@ -177,7 +189,9 @@ def test_init_context_allows_local_new_url_in_dry_run(tmp_path, monkeypatch, con
 
 
 def test_init_context_rejects_local_new_url_in_apply_mode(tmp_path, monkeypatch, config_for):
-    """The `init_context` function must reject a local NEW_URL directory in apply mode."""
+    """The `init_context` function must reject a local NEW_URL directory in
+    apply mode.
+    """
     new_dir = tmp_path / "new"
     new_dir.mkdir()
     cfg = config_for(tmp_path, new_url=str(new_dir), dry_run=True)

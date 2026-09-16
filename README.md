@@ -179,7 +179,17 @@ toolbox --apply delete_files
 ```
 
 After the post updates have succeeded, this command removes the corresponding
-old files from Website Toolbox storage.
+old files from Website Toolbox storage. Deletion progress is checkpointed after
+each fully confirmed batch, so an interrupted run can be resumed without
+resubmitting batches that Website Toolbox already confirmed.
+
+Website Toolbox's own deletion confirmation is required before a batch is marked
+complete. If only part of a batch is confirmed, the ambiguous batch remains
+checkpointed and details are written to `delete_unresolved.json` for
+investigation.
+
+Use `--delete-limit N` when you want to delete only a small number of candidates
+in one run while leaving the rest checkpointed for later.
 
 Because this is the destructive final stage, run it only after reviewing the
 results of the previous steps.
@@ -265,6 +275,11 @@ overrides `DRY_RUN` from the env files.
 For local testing in dry-run mode, `NEW_URL` may point to an existing local
 directory. Destination checks will then use `file://` URLs instead of requiring a
 public image host.
+
+`ADMIN_URL_SLEEP` controls pacing for Website Toolbox Admin UI requests and
+defaults to 5 seconds. Increase it if the Admin UI returns HTTP 429; set it to 0
+to disable the delay. File deletion also honors `Retry-After` on HTTP 429
+responses and otherwise retries with exponential backoff.
 
 
 ### Authentication
