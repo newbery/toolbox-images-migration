@@ -299,7 +299,7 @@ def select_files_to_delete(
 ) -> list[ForumFile]:
     """Return unique Toolbox files safe to hand off to the delete command."""
     blocked_fileids = {files[url].fileid for url in urls_to_keep if url in files}
-    candidates: dict[str, ForumFile] = {}
+    candidates: FilesById = {}
     for url in urls_to_delete:
         file = files.get(url)
         if file is None or not file.url_file or file.fileid in blocked_fileids:

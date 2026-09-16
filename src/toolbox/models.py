@@ -65,7 +65,12 @@ class ForumFile:
         )
 
 
+# Posts keyed by post ID
 PostMap = dict[str, Post]
+
+# Files keyed by ForumFile.fileid
 FilesById = dict[str, ForumFile]
+
+# Files keyed by any known post reference.
+# Multiple keys may refer to the same file.
 FilesByReference = dict[str, ForumFile]
-FileMap = FilesById

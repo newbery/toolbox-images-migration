@@ -21,7 +21,7 @@ from .clients import DeleteConfirmation
 from .context import Context, alive_bar
 from .download import safe_download_path
 from .io import confirm, linecount, read_csv
-from .models import FileMap, FilesById, ForumFile
+from .models import FilesById, FilesByReference, ForumFile
 from .urls import (
     fileid_from_url,
     find_html_references,
@@ -262,7 +262,7 @@ def _uploaded_path_for_url(context: Context, file: ForumFile, url: str) -> Path 
     return safe_download_path(context.path.download_dir / "_uploaded_", path)
 
 
-def check_new_urls(context: Context, files: FileMap) -> bool:
+def check_new_urls(context: Context, files: FilesByReference) -> bool:
     """Check destination URLs referenced by the current `posts.csv`.
 
     A matching file in `_uploaded_` is treated as a record that the destination

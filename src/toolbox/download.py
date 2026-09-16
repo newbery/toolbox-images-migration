@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .context import Context, alive_bar
 from .io import friendly_size, read_csv
-from .models import FileMap, FileResult
+from .models import FileResult, FilesById
 
 
 def safe_download_path(root: Path, path: str) -> Path:
@@ -21,7 +21,7 @@ def safe_download_path(root: Path, path: str) -> Path:
     return target
 
 
-def download_files(context: Context, files: FileMap) -> FileMap:
+def download_files(context: Context, files: FilesById) -> FilesById:
     """Download files to be moved to the new image host"""
     download_dir = context.path.download_dir
     download = context.downloader.download
@@ -127,7 +127,7 @@ def download_files(context: Context, files: FileMap) -> FileMap:
     return files
 
 
-def summarize(context: Context, files: FileMap, legacy: bool = False) -> None:
+def summarize(context: Context, files: FilesById, legacy: bool = False) -> None:
     """Generate final output results from the merge of the results from processing
     the content export and the list_posts API.
     """
