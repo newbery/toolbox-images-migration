@@ -185,15 +185,15 @@ class APIClient(BaseClient):
             yield response
 
         while response["has_more"]:
+            # Throttle the requests
+            # 125719 posts / (100 posts/page) --> 1257 seconds or 21 minutes
+            time.sleep(1)
+
             params["page"] += 1
             with get(url, params=params, headers=self.headers, timeout=30) as resp:
                 resp.raise_for_status()
                 response = resp.json()
                 yield response
-
-            # Throttle the requests
-            # 125719 posts / (100 posts/page) --> 1257 seconds or 21 minutes
-            time.sleep(1)
 
             # Each request counts as a page view, so limit dry runs to
             # 3 requests (300 posts).

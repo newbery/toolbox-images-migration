@@ -83,6 +83,42 @@ def test_downloader_download_removes_partial_file_and_preserves_target_on_error(
     assert not part.exists()
 
 
+def test_api_client_list_posts_paces_requests_between_pages(ctx, monkeypatch):
+    """The `APIClient.list_posts` method must pace each request after the first page."""
+    events = []
+    responses = [
+        {"has_more": True, "data": []},
+        {"has_more": False, "data": []},
+    ]
+
+    class FakeResponse:
+        def __init__(self, response):
+            self.response = response
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.response
+
+    class FakeSession:
+        def get(self, url, params, headers, timeout):
+            events.append(("get", params["page"]))
+            return FakeResponse(responses.pop(0))
+
+    ctx.session = FakeSession()
+    monkeypatch.setattr(clients.time, "sleep", lambda delay: events.append(("sleep", delay)))
+
+    assert len(list(clients.APIClient(ctx).list_posts())) == 2
+    assert events == [("get", 1), ("sleep", 1), ("get", 2)]
+
+
 def test_admin_client_delete_files_uses_ajax_contract_and_paces_requests(ctx, monkeypatch):
     """The `AdminClient.delete_files` method must use the Admin AJAX contract
     and pace its requests.
