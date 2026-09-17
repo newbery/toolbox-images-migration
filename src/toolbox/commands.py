@@ -10,6 +10,26 @@ from .download import download_files, summarize
 from .updates import update_posts
 
 
+def _api_available(context: Context) -> bool:
+    """Return whether the Website Toolbox API is accessible."""
+    if context.api_client.check_api_auth():
+        return True
+    print("API is inaccessible!")
+    print("Maybe the authentication config is invalid?")
+    print("Aborting")
+    return False
+
+
+def _admin_available(context: Context) -> bool:
+    """Return whether the Website Toolbox Admin UI is accessible."""
+    if context.admin_client.check_admin_auth():
+        return True
+    print("Admin UI is inaccessible!")
+    print("Maybe the authentication config is invalid?")
+    print("Aborting")
+    return False
+
+
 def mode_download_files(context: Context) -> None:
     """Process posts, download images, and then generate a list of downloaded
     images and a list of posts to update.
@@ -26,14 +46,10 @@ def mode_download_files(context: Context) -> None:
     to be updated is generated.
     """
 
-    # Confirm that we have access to api
-    if not context.api_client.check_api_auth():
-        print("API is inaccessible!")
-        print("Maybe the authentication config is invalid?")
-        print("Aborting")
+    if not _api_available(context):
         return
 
-    # Keep results from the last 10 runs for debugging purposes
+    # Optional debugging hook: archive the previous output before this run.
     # io.rotate_output_archive(context)
     io.log(context)
 
@@ -64,14 +80,10 @@ def mode_download_links(context: Context) -> None:
     are updated without a date filter. This might take a while to complete.
     """
 
-    # Confirm that we have access to api
-    if not context.api_client.check_api_auth():
-        print("API is inaccessible!")
-        print("Maybe the authentication config is invalid?")
-        print("Aborting")
+    if not _api_available(context):
         return
 
-    # Keep results from the last 10 runs for debugging purposes
+    # Optional debugging hook: archive the previous output before this run.
     # io.rotate_output_archive(context)
     io.log(context)
 
@@ -105,11 +117,7 @@ def mode_update_posts(context: Context) -> None:
     been filtered appropriately by the logic in the `download` mode.
     """
 
-    # Confirm that we have access to api
-    if not context.api_client.check_api_auth():
-        print("API is inaccessible!")
-        print("Maybe the authentication config is invalid?")
-        print("Aborting")
+    if not _api_available(context):
         return
 
     io.log(context)
@@ -119,18 +127,9 @@ def mode_update_posts(context: Context) -> None:
 
 
 def mode_delete_files(context: Context) -> None:
-    """Process the `posts.csv` result from the last `download` run and update
-    the posts with image links updated to point to the new image host.
+    """Delete files listed by a successful `update_posts` handoff."""
 
-    This mode attempts to be cautious by loading the list of files-to-be-deleted
-    from a successful run of 'update_posts'.
-    """
-
-    # Confirm that we have access to Admin UI
-    if not context.admin_client.check_admin_auth():
-        print("Admin UI is inaccessible!")
-        print("Maybe the authentication config is invalid?")
-        print("Aborting")
+    if not _admin_available(context):
         return
 
     io.log(context)
@@ -149,14 +148,10 @@ def mode_update_legacy_links(context: Context) -> None:
     Legacy links are all old so we'll just parse the content export for the data.
     """
 
-    # Confirm that we have access to api
-    if not context.api_client.check_api_auth():
-        print("API is inaccessible!")
-        print("Maybe the authentication config is invalid?")
-        print("Aborting")
+    if not _api_available(context):
         return
 
-    # Keep results from the last 10 runs for debugging purposes
+    # Optional debugging hook: archive the previous output before this run.
     # io.rotate_output_archive(context)
     io.log(context)
 
