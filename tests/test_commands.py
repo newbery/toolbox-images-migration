@@ -40,7 +40,9 @@ def test_mode_download_files_happy_path_calls_pipeline(ctx, monkeypatch):
     monkeypatch.setattr(
         commands,
         "files_from_posts",
-        lambda args, posts: calls.append("files_from_posts") or {},
+        lambda args, posts, *, toolbox_files: (
+            calls.append(("files_from_posts", toolbox_files)) or {}
+        ),
     )
     monkeypatch.setattr(
         commands,
@@ -50,7 +52,9 @@ def test_mode_download_files_happy_path_calls_pipeline(ctx, monkeypatch):
     monkeypatch.setattr(commands, "summarize", lambda args, files: calls.append("summarize"))
     commands.mode_download_files(ctx)
 
-    assert calls == ["log", "export", "api", "files_from_posts", "download_files", "summarize"]
+    assert calls == [
+        "log", "export", "api", ("files_from_posts", True), "download_files", "summarize"
+    ]
 
 
 def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ctx, monkeypatch):
@@ -77,8 +81,10 @@ def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ct
         called.append(("api", include_thumbnails))
         return posts
 
-    def fake_files(context, posts, *, include_thumbnails=True, skip_days=None):
-        called.append(("files_from_posts", include_thumbnails, skip_days))
+    def fake_files(
+        context, posts, *, toolbox_files, include_thumbnails=True, skip_days=None
+    ):
+        called.append(("files_from_posts", toolbox_files, include_thumbnails, skip_days))
         return {}
 
     monkeypatch.setattr(commands, "posts_from_export", fake_export)
@@ -94,7 +100,7 @@ def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ct
         "log",
         ("export", False),
         ("api", False),
-        ("files_from_posts", False, 0),
+        ("files_from_posts", False, False, 0),
         "summarize",
     ]
 

@@ -5,7 +5,7 @@ Discover posts and Website Toolbox-hosted files.
 import csv
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath, PureWindowsPath
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 from .context import Context, alive_bar
 from .io import linecount, read_csv
@@ -142,15 +142,37 @@ def _post_excludes_files(
         return True
 
 
+def _toolbox_fileid_from_reference(
+    reference: str,
+    *,
+    old_url: str,
+    old_url_thumb: str | None,
+) -> str | None:
+    """Return a file ID only for a recognized Website Toolbox source reference."""
+    parsed = urlparse(reference)
+    if parsed.path == "/file" and parsed.query:
+        return fileid_from_url(reference)
+
+    prefixes = (old_url, old_url_thumb) if old_url_thumb else (old_url,)
+    if reference.startswith(prefixes):
+        return fileid_from_url(reference)
+
+    return None
+
+
 def files_from_posts(
     context: Context,
     posts: PostMap,
     *,
+    toolbox_files: bool,
     include_thumbnails: bool = True,
     skip_days: int | None = None,
 ) -> FilesById:
-    """Collect the file info for the urls found in the posts and tag the
-    ones that should be excluded.
+    """Collect file information from discovered post URLs and tag exclusions.
+
+    `toolbox_files` selects whether URLs use Website Toolbox file semantics:
+    Toolbox files are grouped by file ID and may have full, thumbnail, and
+    `/file?id=` references; generic links are identified by their complete URL.
 
     Files/images referenced in recent posts (given by SKIP_DAYS config) will
     be excluded in the theory that recent posts may still be edited and recent
@@ -163,10 +185,6 @@ def files_from_posts(
     prefix = context.config.old_url
     prefix_thumb = context.config.old_url_thumb if include_thumbnails else None
 
-    # This is not 100% reliable. It will be wrong if a non-Toolbox file host
-    # provider is also using cloudfront.net. But it's good enough for us.
-    toolbox = ".cloudfront.net/" in prefix
-
     # Generate map of files/images to posts and set of files_to_exclude
     files: FilesById = {}
     files_to_exclude: set[str] = set()
@@ -176,7 +194,7 @@ def files_from_posts(
         fileids: list[str] = []
         pairs: list[tuple[str, str]] = []
 
-        if toolbox:
+        if toolbox_files:
             for url in urls:
                 if fileid := fileid_from_url(url):
                     fileids.append(fileid)
@@ -209,7 +227,7 @@ def files_from_posts(
                     fileid=fileid,
                     url=url,
                     url_thumb=thumb,
-                    url_file=f"/file?id={fileid}" if toolbox else "",
+                    url_file=f"/file?id={fileid}" if toolbox_files else "",
                     path=_relative_download_path(url, prefix),
                     pids={pid},
                 )
@@ -218,7 +236,7 @@ def files_from_posts(
     # This is intentionally a second pass over the local snapshots: `image_urls`
     # remains the set of images to download, while `pids` records every post that
     # refers to an already-known migrated file via an image, link, or /file?id= URL.
-    if toolbox and files:
+    if toolbox_files and files:
         references: FilesByReference = {}
         for file in files.values():
             for reference in (file.url, file.url_thumb, file.url_file):
@@ -234,7 +252,9 @@ def files_from_posts(
                 for reference in find_html_references(row["message"]):
                     file = references.get(reference)
                     if file is None:
-                        fileid = fileid_from_url(reference)
+                        fileid = _toolbox_fileid_from_reference(
+                            reference, old_url=prefix, old_url_thumb=prefix_thumb
+                        )
                         file = files.get(fileid) if fileid else None
                     if file is not None:
                         matched[file.fileid] = file

@@ -86,13 +86,33 @@ def test_files_from_posts_groups_toolbox_images_by_fileid_and_thumbnail(ctx):
         "1": models.Post(date="0", image_urls=["https://abc.cloudfront.net/999/123/a.jpg"]),
         "2": models.Post(date="0", image_urls=["https://abc.cloudfront.net/thumb/999/123/a.jpg"]),
     }
-    files = discovery.files_from_posts(ctx, posts)
+    files = discovery.files_from_posts(ctx, posts, toolbox_files=True)
     assert "123" in files
     f = files["123"]
     assert f.url.endswith("/999/123/a.jpg")
     assert f.url_thumb.endswith("/thumb/999/123/a.jpg")
     assert f.pids == {"1", "2"}
     assert f.path == "999/123/a.jpg"
+
+
+def test_files_from_posts_treats_cloudfront_links_as_generic_when_requested(ctx):
+    """The `files_from_posts` function must not infer Website Toolbox semantics
+    just because generic source links are hosted on CloudFront.
+    """
+    ctx.config.old_url = "https://generic.cloudfront.net/"
+    ctx.config.old_url_thumb = ""
+    ctx.config.skip_days = 0
+    first = "https://generic.cloudfront.net/999/123/a.jpg"
+    second = "https://generic.cloudfront.net/888/123/b.jpg"
+    posts = {"1": models.Post(date="0", image_urls=[first, second])}
+
+    files = discovery.files_from_posts(ctx, posts, toolbox_files=False)
+
+    assert set(files) == {first, second}
+    assert files[first].fileid == first
+    assert files[second].fileid == second
+    assert files[first].url_file == ""
+    assert files[second].url_file == ""
 
 
 def test_files_from_posts_adds_reference_only_posts_to_known_file(ctx):
@@ -121,9 +141,38 @@ def test_files_from_posts_adds_reference_only_posts_to_known_file(ctx):
         [["3", "0", "[]", "<a href='/file?id=123'>attachment</a>"]],
     )
 
-    files = discovery.files_from_posts(ctx, posts)
+    files = discovery.files_from_posts(ctx, posts, toolbox_files=True)
 
     assert files["123"].pids == {"1", "2", "3"}
+
+
+def test_files_from_posts_matches_fileid_fallback_only_for_toolbox_source_references(ctx):
+    """The `files_from_posts` function must use file-ID fallback for old
+    Toolbox references without matching unrelated URLs that happen to contain
+    the same ID.
+    """
+    ctx.config.old_url = "https://old.cloudfront.net/999/"
+    ctx.config.old_url_thumb = "https://old.cloudfront.net/thumb/999/"
+    ctx.config.skip_days = 0
+
+    known = "https://old.cloudfront.net/999/123/a.jpg"
+    alternate_old = "https://old.cloudfront.net/999/123/alternate-name.jpg"
+    unrelated_new = "https://new.cloudfront.net/999/123/a.jpg"
+    posts = {"1": models.Post(date="0", image_urls=[known])}
+
+    write_csv(
+        ctx.path.posts_from_export,
+        ["pid", "date", "image_urls", "message"],
+        [
+            ["1", "0", repr([known]), f"<img src='{known}'>"],
+            ["2", "0", "[]", f"<a href='{alternate_old}'>old source</a>"],
+            ["3", "0", "[]", f"<a href='{unrelated_new}'>new destination</a>"],
+        ],
+    )
+
+    files = discovery.files_from_posts(ctx, posts, toolbox_files=True)
+
+    assert files["123"].pids == {"1", "2"}
 
 
 def test_files_from_posts_skips_recent_posts(ctx):
@@ -135,7 +184,7 @@ def test_files_from_posts_skips_recent_posts(ctx):
     url = "https://abc.cloudfront.net/1/111/a.jpg"
     posts = {"1": models.Post(date=str(now_ts), image_urls=[url])}
 
-    files = discovery.files_from_posts(ctx, posts)
+    files = discovery.files_from_posts(ctx, posts, toolbox_files=True)
     assert files["111"].result == models.FileResult.skipped
 
 
@@ -149,7 +198,7 @@ def test_files_from_posts_preserves_references_with_malformed_date(ctx):
     url = "https://abc.cloudfront.net/1/111/a.jpg"
     posts = {"1": models.Post(date="not-a-timestamp", image_urls=[url])}
 
-    files = discovery.files_from_posts(ctx, posts)
+    files = discovery.files_from_posts(ctx, posts, toolbox_files=True)
 
     assert files["111"].pids == {"1"}
     assert files["111"].result == models.FileResult.skipped
@@ -164,7 +213,7 @@ def test_files_from_posts_rejects_unsafe_download_path(ctx):
     posts = {"1": models.Post(date="0", image_urls=[url])}
 
     with pytest.raises(ValueError, match="Unsafe download path derived from URL"):
-        discovery.files_from_posts(ctx, posts)
+        discovery.files_from_posts(ctx, posts, toolbox_files=True)
 
 
 def test_files_from_export_resolves_file_reference_from_attachment_metadata(ctx):

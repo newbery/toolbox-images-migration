@@ -56,7 +56,7 @@ def mode_download_files(context: Context) -> None:
     # Process the data sources
     posts = posts_from_export(context)
     posts = posts_from_api(context, posts)
-    files = files_from_posts(context, posts)
+    files = files_from_posts(context, posts, toolbox_files=True)
     files = download_files(context, files)
 
     # Generate summary
@@ -91,7 +91,9 @@ def mode_download_links(context: Context) -> None:
     # URLs and intentionally ignores the configured recent-post cutoff.
     posts = posts_from_export(context, include_thumbnails=False)
     posts = posts_from_api(context, posts, include_thumbnails=False)
-    files = files_from_posts(context, posts, include_thumbnails=False, skip_days=0)
+    files = files_from_posts(
+        context, posts, toolbox_files=False, include_thumbnails=False, skip_days=0
+    )
 
     # Generate summary
     summarize(context, files)
