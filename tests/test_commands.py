@@ -53,7 +53,12 @@ def test_mode_download_files_happy_path_calls_pipeline(ctx, monkeypatch):
     commands.mode_download_files(ctx)
 
     assert calls == [
-        "log", "export", "api", ("files_from_posts", True), "download_files", "summarize"
+        "log",
+        "export",
+        "api",
+        ("files_from_posts", True),
+        "download_files",
+        "summarize",
     ]
 
 

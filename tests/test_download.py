@@ -110,9 +110,7 @@ def test_download_files_paces_network_downloads_but_not_cached_files(ctx, monkey
 
     download.download_files(ctx, files)
 
-    assert events == [
-        ("sleep", 0.75), ("download", "https://old.example.com/456/new.jpg")
-    ]
+    assert events == [("sleep", 0.75), ("download", "https://old.example.com/456/new.jpg")]
 
 
 def test_download_files_keeps_full_image_when_thumbnail_fails(ctx, capsys):

@@ -285,7 +285,10 @@ def test_apply_update_plan_paces_each_api_update(ctx, tmp_path, monkeypatch):
     updates.apply_update_plan(context=ctx, plan_path=plan, updates_output_path=tmp_path / "out.csv")
 
     assert events == [
-        ("sleep", 0.8), ("update", "1", "one"), ("sleep", 0.8), ("update", "2", "two")
+        ("sleep", 0.8),
+        ("update", "1", "one"),
+        ("sleep", 0.8),
+        ("update", "2", "two"),
     ]
 
 
