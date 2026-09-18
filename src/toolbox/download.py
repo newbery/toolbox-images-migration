@@ -3,6 +3,7 @@ Download discovered files and write migration summaries.
 """
 
 import csv
+import time
 from collections import defaultdict
 from itertools import chain
 from pathlib import Path
@@ -25,6 +26,7 @@ def download_files(context: Context, files: FilesById) -> FilesById:
     """Download files to be moved to the new image host"""
     download_dir = context.path.download_dir
     download = context.downloader.download
+    sleep = context.config.old_url_sleep
 
     def download_file(url: str, path: str) -> int:
         """Download a single file"""
@@ -36,6 +38,7 @@ def download_files(context: Context, files: FilesById) -> FilesById:
         elif path_new.exists():
             size = path_new.stat().st_size
         else:
+            time.sleep(sleep)
             size = download(url, path_new)
         return size
 

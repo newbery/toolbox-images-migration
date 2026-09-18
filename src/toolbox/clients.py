@@ -3,9 +3,7 @@ Website Toolbox HTTP clients.
 """
 
 import re
-import time
 from dataclasses import dataclass
-from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -75,7 +73,6 @@ class AdminClient(BaseClient):
         self.dashboard_endpoint = f"{admin_url}/dashboard"
         self.delete_endpoint = f"{admin_url}/mb/uploading"
         self.files_endpoint = f"{admin_url}/mb/uploading/files"
-        self.delay = context.config.admin_url_sleep
         self.headers = {
             "Cookie": context.config.admin_cookie,
             "Referer": self.files_endpoint,
@@ -83,16 +80,13 @@ class AdminClient(BaseClient):
 
     def check_admin_auth(self) -> bool:
         """Check that the Admin cookie in config is valid. If not, return False."""
-        time.sleep(self.delay)
         get = self.context.session.get
         url = self.dashboard_endpoint
         with get(url, headers=self.headers, timeout=30) as resp:
             return resp.ok
 
-    @cached_property
-    def hidden_defaults(self) -> dict[str, str]:
-        """Pull hidden defaults from the real page (trail/sort/reverse/loadedUsername)"""
-        time.sleep(self.delay)
+    def get_delete_defaults(self) -> dict[str, str]:
+        """Fetch hidden values required by the Admin delete form."""
         get = self.context.session.get
         url = self.files_endpoint
         with get(url, headers=self.headers, timeout=30) as resp:
@@ -107,7 +101,7 @@ class AdminClient(BaseClient):
                 hidden[i["name"]] = i.get("value", "")
             return hidden
 
-    def delete_files(self, fileids: list[str]) -> DeleteConfirmation:
+    def delete_files(self, fileids: list[str], defaults: dict[str, str]) -> DeleteConfirmation:
         """Delete files through the current Admin UI AJAX form contract.
 
         A successful HTTP response is not enough: Website Toolbox can return a
@@ -120,11 +114,10 @@ class AdminClient(BaseClient):
         url = self.delete_endpoint
         headers = {**self.headers, "X-Requested-With": "XMLHttpRequest"}
         data = [
-            *self.hidden_defaults.items(),
+            *defaults.items(),
             *(("deleteimg", fileid) for fileid in fileids),
             ("ajax_request", "1"),
         ]
-        time.sleep(self.delay)
         with post(url, data=data, headers=headers, timeout=30) as resp:
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -166,42 +159,17 @@ class APIClient(BaseClient):
         with get(url, params=params, headers=self.headers, timeout=30) as resp:
             return resp.ok
 
-    def list_posts(self):
-        """A generator that returns the results of the "List Posts" API call
-        one response 'page' at a time. Each page contains up to 100 posts.
-
-        This API call returns the most recent posts first. We can stop once we
-        reach a post that has already been processed (via `posts_from_export`).
-        Once this condition is reached, call 'close()' on the iterator returned
-        by this generator and continue to next iteration which will end it.
-        """
-        params = {"limit": 100, "page": 1}
+    def list_posts_page(self, page: int) -> dict:
+        """Return one page from the List Posts API."""
         get = self.context.session.get
         url = self.posts_endpoint
-
+        params = {"limit": 100, "page": page}
         with get(url, params=params, headers=self.headers, timeout=30) as resp:
             resp.raise_for_status()
-            response = resp.json()
-            yield response
-
-        while response["has_more"]:
-            # Throttle the requests
-            # 125719 posts / (100 posts/page) --> 1257 seconds or 21 minutes
-            time.sleep(1)
-
-            params["page"] += 1
-            with get(url, params=params, headers=self.headers, timeout=30) as resp:
-                resp.raise_for_status()
-                response = resp.json()
-                yield response
-
-            # Each request counts as a page view, so limit dry runs to
-            # 3 requests (300 posts).
-            if self.context.dry_run and params["page"] > 2:
-                return
+            return resp.json()
 
     def update_post(self, pid: str, message: str) -> bool:
-        """Call the "Update Post" API endpoint to update a post message."""
+        """Call the Update Post API endpoint to update a post message."""
         self._require_apply(f"update_post pid={pid}")
         post = self.context.session.post
         url = f"{self.posts_endpoint}/{pid}"

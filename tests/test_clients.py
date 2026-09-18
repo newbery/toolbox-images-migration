@@ -4,8 +4,8 @@ from toolbox import clients
 
 
 def test_downloader_download_creates_target_only_after_download_completes(ctx, tmp_path):
-    """The `Downloader.download` method must create the target only after the entire response body
-    has been written successfully.
+    """The `Downloader.download` method must create the target only after the
+    entire response body has been written successfully.
     """
     target = tmp_path / "nested" / "image.jpg"
     part = target.with_name(f"{target.name}.part")
@@ -29,8 +29,11 @@ def test_downloader_download_creates_target_only_after_download_completes(ctx, t
             assert part.exists()
             yield b"def"
 
+    events = []
+
     class FakeSession:
         def get(self, url, stream, timeout):
+            events.append("get")
             assert url == "https://example.com/image.jpg"
             assert stream is True
             assert timeout == 60
@@ -43,11 +46,12 @@ def test_downloader_download_creates_target_only_after_download_completes(ctx, t
     assert size == 6
     assert target.read_bytes() == b"abcdef"
     assert not part.exists()
+    assert events == ["get"]
 
 
 def test_downloader_download_removes_partial_file_and_preserves_target_on_error(ctx, tmp_path):
-    """The `Downloader.download` method must remove the partial file and preserve an existing
-    target when streaming fails.
+    """The `Downloader.download` method must remove the partial file and preserve
+    an existing target when streaming fails.
     """
     target = tmp_path / "image.jpg"
     target.write_bytes(b"existing")
@@ -83,18 +87,12 @@ def test_downloader_download_removes_partial_file_and_preserves_target_on_error(
     assert not part.exists()
 
 
-def test_api_client_list_posts_paces_requests_between_pages(ctx, monkeypatch):
-    """The `APIClient.list_posts` method must pace each request after the first page."""
-    events = []
-    responses = [
-        {"has_more": True, "data": []},
-        {"has_more": False, "data": []},
-    ]
+def test_api_client_list_posts_page_requests_one_page(ctx):
+    """The `APIClient.list_posts_page` method must request and return one page."""
+    response_value = {"has_more": False, "data": [{"postId": 123}]}
+    calls = []
 
     class FakeResponse:
-        def __init__(self, response):
-            self.response = response
-
         def __enter__(self):
             return self
 
@@ -105,32 +103,28 @@ def test_api_client_list_posts_paces_requests_between_pages(ctx, monkeypatch):
             return None
 
         def json(self):
-            return self.response
+            return response_value
 
     class FakeSession:
         def get(self, url, params, headers, timeout):
-            events.append(("get", params["page"]))
-            return FakeResponse(responses.pop(0))
+            calls.append((url, dict(params), timeout))
+            return FakeResponse()
 
     ctx.session = FakeSession()
-    monkeypatch.setattr(clients.time, "sleep", lambda delay: events.append(("sleep", delay)))
 
-    assert len(list(clients.APIClient(ctx).list_posts())) == 2
-    assert events == [("get", 1), ("sleep", 1), ("get", 2)]
+    result = clients.APIClient(ctx).list_posts_page(3)
+
+    assert result == response_value
+    assert calls == [("https://api.example.com/api/posts", {"limit": 100, "page": 3}, 30)]
 
 
-def test_admin_client_delete_files_uses_ajax_contract_and_paces_requests(ctx, monkeypatch):
-    """The `AdminClient.delete_files` method must use the Admin AJAX contract
-    and pace its requests.
-    """
-    events = []
-    posted = {}
-    ctx.config.admin_url_sleep = 2.5
+def test_api_client_update_post_sends_request(ctx):
+    """The `APIClient.update_post` method must send the requested post update."""
+    calls = []
     ctx.dry_run = False
 
     class FakeResponse:
-        def __init__(self, text):
-            self.text = text
+        ok = True
 
         def __enter__(self):
             return self
@@ -142,57 +136,33 @@ def test_admin_client_delete_files_uses_ajax_contract_and_paces_requests(ctx, mo
             return None
 
     class FakeSession:
-        def get(self, url, headers, timeout):
-            events.append(("get", url))
-            return FakeResponse(
-                '<form id="frmFiles">'
-                '<input type="hidden" name="action" value="deleteFiles">'
-                '<input type="hidden" name="trail" value="100">'
-                '<input type="hidden" name="sort" value="a.filename">'
-                '<input type="hidden" name="reverse" value="">'
-                '<input type="hidden" name="loadedUsername" value="vss">'
-                "</form>"
-            )
-
-        def post(self, url, data, headers, timeout):
-            events.append(("post", url))
-            posted.update(url=url, data=list(data), headers=dict(headers), timeout=timeout)
-            return FakeResponse('<div class="alert alert-danger">2 files have been deleted.</div>')
+        def post(self, url, json, headers, timeout):
+            calls.append((url, json, timeout))
+            return FakeResponse()
 
     ctx.session = FakeSession()
-    monkeypatch.setattr(clients.time, "sleep", lambda delay: events.append(("sleep", delay)))
 
-    confirmation = clients.AdminClient(ctx).delete_files(["123", "456"])
-
-    assert confirmation == clients.DeleteConfirmation(message="2 files have been deleted.", count=2)
-    assert posted["url"] == "https://admin.example.com/mb/uploading"
-    assert posted["timeout"] == 30
-    assert posted["headers"]["X-Requested-With"] == "XMLHttpRequest"
-    assert posted["data"] == [
-        ("action", "deleteFiles"),
-        ("trail", "100"),
-        ("sort", "a.filename"),
-        ("reverse", ""),
-        ("loadedUsername", "vss"),
-        ("deleteimg", "123"),
-        ("deleteimg", "456"),
-        ("ajax_request", "1"),
-    ]
-    assert events == [
-        ("sleep", 2.5),
-        ("get", "https://admin.example.com/mb/uploading/files"),
-        ("sleep", 2.5),
-        ("post", "https://admin.example.com/mb/uploading"),
+    assert clients.APIClient(ctx).update_post("123", "updated") is True
+    assert calls == [
+        ("https://api.example.com/api/posts/123", {"content": "updated"}, 30),
     ]
 
 
-def test_admin_client_delete_files_refuses_missing_files_form(ctx):
-    """The `AdminClient.delete_files` method must refuse to post deletions
-    when the expected `frmFiles` form is missing.
+def test_admin_client_get_delete_defaults_reads_files_form(ctx):
+    """The `AdminClient.get_delete_defaults` method must return hidden values
+    from the Admin files form.
     """
 
     class FakeResponse:
-        text = "<html><body>No files form</body></html>"
+        text = (
+            '<form id="frmFiles">'
+            '<input type="hidden" name="action" value="deleteFiles">'
+            '<input type="hidden" name="trail" value="100">'
+            '<input type="hidden" name="sort" value="a.filename">'
+            '<input type="hidden" name="reverse" value="">'
+            '<input type="hidden" name="loadedUsername" value="vss">'
+            "</form>"
+        )
 
         def __enter__(self):
             return self
@@ -209,25 +179,24 @@ def test_admin_client_delete_files_refuses_missing_files_form(ctx):
             assert timeout == 30
             return FakeResponse()
 
-        def post(self, *args, **kwargs):
-            pytest.fail("delete request must not be sent without frmFiles")
-
-    ctx.dry_run = False
     ctx.session = FakeSession()
 
-    with pytest.raises(RuntimeError, match="Expected form #frmFiles not found"):
-        clients.AdminClient(ctx).delete_files(["123"])
+    assert clients.AdminClient(ctx).get_delete_defaults() == {
+        "action": "deleteFiles",
+        "trail": "100",
+        "sort": "a.filename",
+        "reverse": "",
+        "loadedUsername": "vss",
+    }
 
 
-def test_admin_client_delete_files_parses_singular_confirmation(ctx):
-    """The `AdminClient.delete_files` method must count the singular deletion
-    confirmation as one deletion.
+def test_admin_client_get_delete_defaults_refuses_missing_files_form(ctx):
+    """The `AdminClient.get_delete_defaults` method must refuse a page without
+    the expected `frmFiles` form.
     """
-    ctx.dry_run = False
 
     class FakeResponse:
-        def __init__(self, text):
-            self.text = text
+        text = "<html><body>No files form</body></html>"
 
         def __enter__(self):
             return self
@@ -240,16 +209,90 @@ def test_admin_client_delete_files_parses_singular_confirmation(ctx):
 
     class FakeSession:
         def get(self, url, headers, timeout):
-            return FakeResponse(
-                '<form id="frmFiles"><input type="hidden" name="action" value="deleteFiles"></form>'
-            )
-
-        def post(self, url, data, headers, timeout):
-            return FakeResponse('<div class="alert alert-danger">The file has been deleted.</div>')
+            return FakeResponse()
 
     ctx.session = FakeSession()
 
-    assert clients.AdminClient(ctx).delete_files(["123"]) == clients.DeleteConfirmation(
+    with pytest.raises(RuntimeError, match="Expected form #frmFiles not found"):
+        clients.AdminClient(ctx).get_delete_defaults()
+
+
+def test_admin_client_delete_files_uses_ajax_contract(ctx):
+    """The `AdminClient.delete_files` method must submit the Admin AJAX contract
+    using caller-supplied form defaults.
+    """
+    posted = {}
+    ctx.dry_run = False
+    defaults = {
+        "action": "deleteFiles",
+        "trail": "100",
+        "sort": "a.filename",
+        "reverse": "",
+        "loadedUsername": "vss",
+    }
+
+    class FakeResponse:
+        text = '<div class="alert alert-danger">2 files have been deleted.</div>'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+    class FakeSession:
+        def post(self, url, data, headers, timeout):
+            posted.update(url=url, data=list(data), headers=dict(headers), timeout=timeout)
+            return FakeResponse()
+
+    ctx.session = FakeSession()
+
+    confirmation = clients.AdminClient(ctx).delete_files(["123", "456"], defaults)
+
+    assert confirmation == clients.DeleteConfirmation(message="2 files have been deleted.", count=2)
+    assert posted["url"] == "https://admin.example.com/mb/uploading"
+    assert posted["timeout"] == 30
+    assert posted["headers"]["X-Requested-With"] == "XMLHttpRequest"
+    assert posted["data"] == [
+        ("action", "deleteFiles"),
+        ("trail", "100"),
+        ("sort", "a.filename"),
+        ("reverse", ""),
+        ("loadedUsername", "vss"),
+        ("deleteimg", "123"),
+        ("deleteimg", "456"),
+        ("ajax_request", "1"),
+    ]
+
+
+def test_admin_client_delete_files_parses_singular_confirmation(ctx):
+    """The `AdminClient.delete_files` method must count the singular deletion
+    confirmation as one deletion.
+    """
+    ctx.dry_run = False
+
+    class FakeResponse:
+        text = '<div class="alert alert-danger">The file has been deleted.</div>'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+    class FakeSession:
+        def post(self, url, data, headers, timeout):
+            return FakeResponse()
+
+    ctx.session = FakeSession()
+
+    assert clients.AdminClient(ctx).delete_files(["123"], {}) == clients.DeleteConfirmation(
         message="The file has been deleted.", count=1
     )
 
@@ -261,8 +304,7 @@ def test_admin_client_delete_files_rejects_ambiguous_plural_confirmation(ctx):
     ctx.dry_run = False
 
     class FakeResponse:
-        def __init__(self, text):
-            self.text = text
+        text = '<div class="alert alert-danger">The files have been deleted.</div>'
 
         def __enter__(self):
             return self
@@ -274,31 +316,23 @@ def test_admin_client_delete_files_rejects_ambiguous_plural_confirmation(ctx):
             return None
 
     class FakeSession:
-        def get(self, url, headers, timeout):
-            return FakeResponse(
-                '<form id="frmFiles"><input type="hidden" name="action" value="deleteFiles"></form>'
-            )
-
         def post(self, url, data, headers, timeout):
-            return FakeResponse(
-                '<div class="alert alert-danger">The files have been deleted.</div>'
-            )
+            return FakeResponse()
 
     ctx.session = FakeSession()
 
     with pytest.raises(RuntimeError, match="did not confirm deletion"):
-        clients.AdminClient(ctx).delete_files(["123", "456"])
+        clients.AdminClient(ctx).delete_files(["123", "456"], {})
 
 
 def test_admin_client_delete_files_requires_confirmation_message(ctx):
-    """The `AdminClient.delete_files` method must reject a successful
-    HTTP response without a deletion confirmation.
+    """The `AdminClient.delete_files` method must reject a successful HTTP
+    response without a deletion confirmation.
     """
     ctx.dry_run = False
 
     class FakeResponse:
-        def __init__(self, text):
-            self.text = text
+        text = '<div class="alert alert-info">Manage all uploaded files.</div>'
 
         def __enter__(self):
             return self
@@ -310,15 +344,10 @@ def test_admin_client_delete_files_requires_confirmation_message(ctx):
             return None
 
     class FakeSession:
-        def get(self, url, headers, timeout):
-            return FakeResponse(
-                '<form id="frmFiles"><input type="hidden" name="action" value="deleteFiles"></form>'
-            )
-
         def post(self, url, data, headers, timeout):
-            return FakeResponse('<div class="alert alert-info">Manage all uploaded files.</div>')
+            return FakeResponse()
 
     ctx.session = FakeSession()
 
     with pytest.raises(RuntimeError, match="did not confirm deletion"):
-        clients.AdminClient(ctx).delete_files(["123"])
+        clients.AdminClient(ctx).delete_files(["123"], {})

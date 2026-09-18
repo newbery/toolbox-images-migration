@@ -31,46 +31,68 @@ def test_posts_from_api_adds_new_posts_and_stops_at_existing_pid(ctx):
     URLs, and stop when it encounters an already-seen post ID.
     """
 
-    class FakeApiRequests:
-        def __init__(self, pages):
-            self.pages = pages
-            self.closed = False
-
-        def __iter__(self):
-            yield from self.pages
-
-        def close(self):
-            self.closed = True
-
     class FakeClient:
         def __init__(self, pages):
-            self._pages = pages
+            self.pages = pages
+            self.requested = []
 
-        def list_posts(self):
-            return FakeApiRequests(self._pages)
+        def list_posts_page(self, page):
+            self.requested.append(page)
+            return self.pages[page - 1]
 
-    # Existing post from export already processed
     posts = {"1": models.Post(date="100", image_urls=[])}
     pages = [
         {
+            "has_more": True,
             "data": [
                 {
                     "postId": 2,
                     "postTimestamp": "200",
                     "message": '<img src="https://old.example.com/2.jpg"/>',
                 }
-            ]
+            ],
         },
-        {"data": [{"postId": 1, "postTimestamp": "199", "message": "stop here"}]},
-        {"data": [{"postId": 3, "postTimestamp": "198", "message": "should not be reached"}]},
+        {
+            "has_more": True,
+            "data": [{"postId": 1, "postTimestamp": "199", "message": "stop here"}],
+        },
+        {
+            "has_more": False,
+            "data": [{"postId": 3, "postTimestamp": "198", "message": "not reached"}],
+        },
     ]
-    ctx.api_client = FakeClient(pages)
+    client = FakeClient(pages)
+    ctx.api_client = client
+
     out = discovery.posts_from_api(ctx, posts)
+
     assert "2" in out
     assert out["2"].image_urls == ["https://old.example.com/2.jpg"]
-
-    # "3" should not be processed due to early stop
     assert "3" not in out
+    assert client.requested == [1, 2]
+
+
+def test_posts_from_api_paces_before_each_page_request(ctx, monkeypatch):
+    """The `posts_from_api` function must pace the repeated API page requests."""
+    events = []
+
+    class FakeClient:
+        def list_posts_page(self, page):
+            events.append(("request", page))
+            return {"has_more": page == 1, "data": []}
+
+    ctx.api_client = FakeClient()
+    ctx.config.api_url_sleep = 1.25
+    monkeypatch.setattr(discovery.time, "sleep", lambda delay: events.append(("sleep", delay)))
+
+    discovery.posts_from_api(ctx, {})
+
+    assert events == [
+        ("sleep", 1.25),
+        ("request", 1),
+        ("sleep", 1.25),
+        ("request", 2),
+    ]
 
 
 def test_files_from_posts_groups_toolbox_images_by_fileid_and_thumbnail(ctx):

@@ -42,7 +42,10 @@ class Config:
     api_key: str
     api_username: str
     admin_cookie: str
+    api_url_sleep: float = 1.0
     admin_url_sleep: float = 5.0
+    old_url_sleep: float = 0.0
+    new_url_sleep: float = 0.25
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, str | None]) -> Self:
@@ -76,7 +79,10 @@ class Config:
             api_key=value("api_key"),
             api_username=value("api_username"),
             admin_cookie=value("admin_cookie"),
+            api_url_sleep=float(value("api_url_sleep", "1.0")),
             admin_url_sleep=float(value("admin_url_sleep", "5.0")),
+            old_url_sleep=float(value("old_url_sleep", "0.0")),
+            new_url_sleep=float(value("new_url_sleep", "0.25")),
         )
 
 
@@ -177,8 +183,9 @@ def validate_config(config: Config, *, dry_run: bool) -> None:
 
     if config.skip_days < 0:
         raise ValueError("SKIP_DAYS must be greater than or equal to 0")
-    if config.admin_url_sleep < 0:
-        raise ValueError("ADMIN_URL_SLEEP must be greater than or equal to 0")
+    for name in ("api_url_sleep", "admin_url_sleep", "old_url_sleep", "new_url_sleep"):
+        if getattr(config, name) < 0:
+            raise ValueError(f"{name.upper()} must be greater than or equal to 0")
 
 
 def config() -> Config:

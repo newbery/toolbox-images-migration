@@ -62,13 +62,15 @@ def _retry(error: requests.HTTPError, retry_number: int) -> float:
     return min(_DELETE_429_BASE_SLEEP * (2 ** (retry_number - 1)), _DELETE_429_MAX_SLEEP)
 
 
-def _delete_batch(context: Context, fileids: list[str]) -> DeleteConfirmation:
+def _delete_batch(
+    context: Context, fileids: list[str], defaults: dict[str, str]
+) -> DeleteConfirmation:
     """Delete one batch, retrying HTTP 429 responses with backoff."""
     client = context.admin_client
     retry_number = 0
     while True:
         try:
-            confirmation = client.delete_files(fileids)
+            confirmation = client.delete_files(fileids, defaults)
             print(f"Delete files: Website Toolbox confirmation: {confirmation.message}")
             return confirmation
         except requests.HTTPError as error:
@@ -110,6 +112,7 @@ def delete_files(context: Context) -> None:
     confirmations leave the entire ambiguous batch pending and write
     `delete_unresolved.json` for later reconciliation.
     """
+    sleep = context.config.admin_url_sleep
     deletes_path = context.path.fileids_to_delete
     remaining = [str(fileid) for fileid in json.loads(deletes_path.read_text())]
     count = len(remaining)
@@ -155,11 +158,13 @@ def delete_files(context: Context) -> None:
     confirmed = 0
 
     try:
+        defaults = context.admin_client.get_delete_defaults()
         with alive_bar(run_count, title="Delete files") as bar:
             while submitted < run_count:
                 batch_size = min(_DELETE_BATCH_SIZE, run_count - submitted)
                 batch = remaining[:batch_size]
-                confirmation = _delete_batch(context, batch)
+                time.sleep(sleep)
+                confirmation = _delete_batch(context, batch, defaults)
                 submitted += len(batch)
 
                 if confirmation.count > len(batch):
@@ -271,15 +276,12 @@ def check_new_urls(context: Context, files: FilesByReference) -> bool:
     variant need no destination check because their obsolete post references will
     be removed. Return False if any required destination URL cannot be confirmed.
     """
-    dry_run = context.dry_run
+    sleep = context.config.new_url_sleep
     old_prefix = context.config.old_url
     thumb_prefix = context.config.old_url_thumb
     new_prefix = _new_url_prefix(context)
     posts_path = context.path.posts
     url_ok = context.url_ok
-
-    # Keep URL checks slow enough to avoid overwhelming the destination host.
-    sleep = 0.001 if dry_run else 0.25
 
     new_url_func = get_new_url_func(old_prefix, thumb_prefix, new_prefix)
 
@@ -314,9 +316,9 @@ def check_new_urls(context: Context, files: FilesByReference) -> bool:
                     continue
 
                 new_url = file.new_url if file.new_url else new_url_func(source_url)
+                time.sleep(sleep)
                 if not url_ok(new_url):
                     images_errors.add(new_url)
-                time.sleep(sleep)
             bar()
 
     if images_errors:
@@ -367,6 +369,7 @@ def archive_downloads(context: Context) -> None:
     for URL checks and removed in apply mode.
     """
     dry_run = context.dry_run
+    sleep = context.config.new_url_sleep
     download_dir = Path(context.path.download_dir)
     new_dir = download_dir / "_new_"
     uploaded_dir = download_dir / "_uploaded_"
@@ -387,7 +390,6 @@ def archive_downloads(context: Context) -> None:
     failures: list[tuple[str, str, str]] = []
     conflicts: list[str] = []
     interrupted = False
-    sleep = 0.001 if dry_run else 0.25
 
     print(f"Archive downloads: Checking {total} files under {new_dir}")
 
@@ -395,6 +397,7 @@ def archive_downloads(context: Context) -> None:
         with alive_bar(total, title="Archive downloads") as bar:
             for src_path, rel in files:
                 new_url = _new_url_for_download_path(context, rel)
+                time.sleep(sleep)
                 try:
                     status = url_status(new_url)
                 except requests.RequestException as exc:
@@ -426,7 +429,6 @@ def archive_downloads(context: Context) -> None:
 
                 bar.text = f"{checked}/{total} checked; {found} found; {len(failures)} failed"
                 bar()
-                time.sleep(sleep)
     except KeyboardInterrupt:
         interrupted = True
 

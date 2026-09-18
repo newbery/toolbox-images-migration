@@ -81,9 +81,7 @@ def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ct
         called.append(("api", include_thumbnails))
         return posts
 
-    def fake_files(
-        context, posts, *, toolbox_files, include_thumbnails=True, skip_days=None
-    ):
+    def fake_files(context, posts, *, toolbox_files, include_thumbnails=True, skip_days=None):
         called.append(("files_from_posts", toolbox_files, include_thumbnails, skip_days))
         return {}
 

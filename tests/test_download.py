@@ -75,6 +75,46 @@ def test_download_files_uses_uploaded_archive_as_cache(ctx):
     assert out["123"].result is models.FileResult.downloaded
 
 
+def test_download_files_paces_network_downloads_but_not_cached_files(ctx, monkeypatch):
+    """The `download_files` function must pace actual source requests without
+    delaying files satisfied from the local upload archive.
+    """
+    cached = ctx.path.download_dir / "_uploaded_" / "123" / "cached.jpg"
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(b"cached")
+
+    events = []
+
+    class FakeDownloader:
+        def download(self, url, path_new):
+            events.append(("download", url))
+            return 3
+
+    ctx.downloader = FakeDownloader()
+    ctx.config.old_url_sleep = 0.75
+    monkeypatch.setattr(download.time, "sleep", lambda delay: events.append(("sleep", delay)))
+    files = {
+        "123": models.ForumFile(
+            fileid="123",
+            url="https://old.example.com/123/cached.jpg",
+            path="123/cached.jpg",
+            pids={"1"},
+        ),
+        "456": models.ForumFile(
+            fileid="456",
+            url="https://old.example.com/456/new.jpg",
+            path="456/new.jpg",
+            pids={"2"},
+        ),
+    }
+
+    download.download_files(ctx, files)
+
+    assert events == [
+        ("sleep", 0.75), ("download", "https://old.example.com/456/new.jpg")
+    ]
+
+
 def test_download_files_keeps_full_image_when_thumbnail_fails(ctx, capsys):
     """The `download_files` function must retain a successful full image when
     its thumbnail download fails.

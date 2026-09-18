@@ -261,11 +261,38 @@ def test_select_files_to_delete_blocks_kept_fileids_and_ignores_non_toolbox_file
     )
 
 
+def test_apply_update_plan_paces_each_api_update(ctx, tmp_path, monkeypatch):
+    """The `apply_update_plan` function must pace repeated API update requests."""
+    plan = tmp_path / "plan.jsonl"
+    plan.write_text(
+        json.dumps({"pid": "1", "content": "one", "touched_urls": []})
+        + "\n"
+        + json.dumps({"pid": "2", "content": "two", "touched_urls": []})
+        + "\n"
+    )
+    events = []
+
+    class FakeClient:
+        def update_post(self, pid, message):
+            events.append(("update", pid, message))
+            return True
+
+    ctx.api_client = FakeClient()
+    ctx.dry_run = False
+    ctx.config.api_url_sleep = 0.8
+    monkeypatch.setattr(updates.time, "sleep", lambda delay: events.append(("sleep", delay)))
+
+    updates.apply_update_plan(context=ctx, plan_path=plan, updates_output_path=tmp_path / "out.csv")
+
+    assert events == [
+        ("sleep", 0.8), ("update", "1", "one"), ("sleep", 0.8), ("update", "2", "two")
+    ]
+
+
 def test_update_posts_dry_run_writes_preview_and_delete_candidates(ctx, monkeypatch):
     """The `update_posts` function must write dry-run previews and delete candidates
     without calling the API or modifying apply state.
     """
-    monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
 
     full = "https://old.example.com/123/a.jpg"
     thumb = "https://old.example.com/thumb/123/a.jpg"
@@ -376,7 +403,6 @@ def test_update_posts_apply_rerun_skips_identical_success(ctx, monkeypatch):
     _write_simple_update_inputs(ctx)
     monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
     calls = []
 
     class FakeClient:
@@ -403,7 +429,6 @@ def test_update_posts_apply_reapplies_when_target_content_changes(ctx, monkeypat
     _write_simple_update_inputs(ctx)
     monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
     calls = []
 
     class FakeClient:
@@ -432,7 +457,6 @@ def test_update_posts_apply_resumes_after_failure(ctx, monkeypatch):
     _write_simple_update_inputs(ctx, pids=("1", "2"))
     monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
     first_calls = []
 
     class InterruptingClient:
@@ -494,7 +518,6 @@ def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(ctx, mon
     )
     monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
 
     class FakeClient:
         def update_post(self, _pid, _message):
@@ -535,7 +558,6 @@ def test_update_posts_legacy_mode_uses_separate_journal_and_preserves_delete_han
     )
 
     monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(updates.time, "sleep", lambda *_args, **_kwargs: None)
     calls = []
 
     class FakeClient:

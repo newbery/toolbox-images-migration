@@ -276,10 +276,19 @@ For local testing in dry-run mode, `NEW_URL` may point to an existing local
 directory. Destination checks will then use `file://` URLs instead of requiring a
 public image host.
 
-`ADMIN_URL_SLEEP` controls pacing for Website Toolbox Admin UI requests and
-defaults to 5 seconds. Increase it if the Admin UI returns HTTP 429; set it to 0
-to disable the delay. File deletion also honors `Retry-After` on HTTP 429
-responses and otherwise retries with exponential backoff.
+Pacing of repeated requests can be adjusted:
+
+- `API_URL_SLEEP` controls API pagination and post-update loops.
+  Default is 1 second between requests.
+- `ADMIN_URL_SLEEP` controls file-deletion batches.
+  Default is 5 seconds between requests.
+- `OLD_URL_SLEEP` controls source-image download loops.
+  Default is 0 seconds between requests.
+- `NEW_URL_SLEEP` controls destination-image check loops.
+  Default is 0.25 seconds between requests.
+
+Set any delay to 0 to disable it. File deletion also honors `Retry-After`
+on HTTP 429 responses and otherwise retries with exponential backoff.
 
 
 ### Authentication
@@ -318,9 +327,9 @@ features:
 
 ## Operational notes
 
-Website Toolbox API requests are intentionally throttled. Large migrations,
-especially the post-update and file-deletion stages, can therefore take some
-time.
+External requests are intentionally paced according to the configured URL sleep
+settings. Large migrations, especially the post-update and file-deletion stages,
+can therefore take some time.
 
 Additional diagnostic and legacy commands are available through:
 

@@ -3,6 +3,7 @@ Discover posts and Website Toolbox-hosted files.
 """
 
 import csv
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath, PureWindowsPath
 from urllib.parse import unquote, urlparse
@@ -76,16 +77,17 @@ def posts_from_export(
 
 
 def posts_from_api(context: Context, posts: PostMap, *, include_thumbnails: bool = True) -> PostMap:
-    """Process the posts collected via the List Posts API, collecting a list of
-    image urls in the message text for any images hosted by the Toolbox server.
+    """Process posts collected through the List Posts API.
 
-    The most recent posts are returned first so once we reach a post that we've
-    previously processed (via the content export processing), we can skip the rest.
+    The most recent posts are returned first, so stop once a post already
+    collected from the content export is encountered. Pace the page-request
+    loop here rather than inside the standalone API request method.
     """
     client = context.api_client
     old_url = context.config.old_url
     old_url_thumb = context.config.old_url_thumb if include_thumbnails else None
     posts_output_path = context.path.posts_from_api
+    sleep = context.config.api_url_sleep
 
     prefix = (old_url, old_url_thumb) if old_url_thumb else old_url
     find_urls = find_urls_func(prefix)
@@ -99,16 +101,16 @@ def posts_from_api(context: Context, posts: PostMap, *, include_thumbnails: bool
             posts_output = csv.writer(f)
             posts_output.writerow(fieldnames)
 
-            stop = False
-            api_requests = client.list_posts()
-            for page in api_requests:
-                for row in page["data"]:
+            page = 1
+            while True:
+                time.sleep(sleep)
+                response = client.list_posts_page(page)
+                stop = False
+                for row in response["data"]:
                     pid = str(row["postId"])
                     if pid in posts:
-                        # this is processed already so exit early
                         bar()
                         stop = True
-                        api_requests.close()
                         break
                     count += 1
                     date = row["postTimestamp"]
@@ -120,8 +122,15 @@ def posts_from_api(context: Context, posts: PostMap, *, include_thumbnails: bool
                     posts_output.writerow([pid, date, image_urls, message])
                     bar()
 
-                if stop:
+                if stop or not response["has_more"]:
                     break
+
+                # Each request counts as a page view, so limit dry runs to
+                # 3 requests (300 posts).
+                if context.dry_run and page >= 3:
+                    break
+
+                page += 1
 
     print(f"From api: Processed {count} posts; Found {found} with image links")
     return posts

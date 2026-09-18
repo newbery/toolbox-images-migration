@@ -266,6 +266,7 @@ def apply_update_plan(
                         bar()
                         continue
 
+                    time.sleep(context.config.api_url_sleep)
                     if client.update_post(pid, new_message):
                         urls_to_delete.update(touched_urls)
                         posts_updated += 1
@@ -278,7 +279,6 @@ def apply_update_plan(
                     updates_output.writerow([pid, result, new_message])
                     f.flush()
                     previous_results[pid] = (result, new_message)
-                    time.sleep(1)  # Throttle API requests
                     bar()
 
     return (

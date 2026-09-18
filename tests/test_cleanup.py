@@ -12,7 +12,9 @@ def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch,
     report destination failures.
     """
     ctx.dry_run = False
-    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    ctx.config.new_url_sleep = 0.4
+    events = []
+    monkeypatch.setattr(cleanup.time, "sleep", lambda delay: events.append(("sleep", delay)))
     progress = []
 
     class RecordingAliveBar:
@@ -42,6 +44,7 @@ def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch,
 
     def url_status(url):
         checked.append(url)
+        events.append(("check", url))
         return 404 if url.endswith("456/missing.jpg") else 200
 
     ctx.url_status = url_status
@@ -69,6 +72,14 @@ def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch,
         "1/3 checked; 1 found; 0 failed",
         "2/3 checked; 1 found; 1 failed",
         "3/3 checked; 2 found; 1 failed",
+    ]
+    assert events == [
+        ("sleep", 0.4),
+        ("check", checked[0]),
+        ("sleep", 0.4),
+        ("check", checked[1]),
+        ("sleep", 0.4),
+        ("check", checked[2]),
     ]
     assert "3 checked; 2 found; 1 failed; 0 unchecked" in out
     assert out.rstrip().splitlines()[-1].startswith("Archive downloads: 2 archived; 1 remaining")
@@ -283,7 +294,9 @@ def test_check_new_urls_trusts_uploaded_archive_and_falls_back_to_remote(ctx, mo
     """The `check_new_urls` function must trust archived files and check
     unarchived destination URLs.
     """
-    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    ctx.config.new_url_sleep = 0.6
+    events = []
+    monkeypatch.setattr(cleanup.time, "sleep", lambda delay: events.append(("sleep", delay)))
     uploaded = ctx.path.download_dir / "_uploaded_" / "123" / "a.jpg"
     uploaded.parent.mkdir(parents=True)
     uploaded.write_bytes(b"confirmed")
@@ -303,10 +316,17 @@ def test_check_new_urls_trusts_uploaded_archive_and_falls_back_to_remote(ctx, mo
         urls[1]: models.ForumFile(fileid="456", url=urls[1], path="456/b.jpg", result=downloaded),
     }
     checked = []
-    ctx.url_ok = lambda url: checked.append(url) or True
+
+    def url_ok(url):
+        checked.append(url)
+        events.append(("check", url))
+        return True
+
+    ctx.url_ok = url_ok
 
     assert cleanup.check_new_urls(ctx, files) is True
     assert checked == ["https://new.example.com/456/b.jpg"]
+    assert events == [("sleep", 0.6), ("check", checked[0])]
 
 
 def test_check_new_urls_uses_uploaded_thumbnail_archive_path(ctx, monkeypatch):
@@ -618,6 +638,14 @@ def test_check_old_urls_removes_stale_diagnostic_report_on_success(ctx):
     assert not ctx.path.old_reference_failures.exists()
 
 
+class _FakeDeleteAdmin:
+    def __init__(self):
+        self.defaults = {"action": "deleteFiles"}
+
+    def get_delete_defaults(self):
+        return self.defaults
+
+
 def _http_error(status: int, *, retry_after: str | None = None) -> requests.HTTPError:
     response = requests.Response()
     response.status_code = status
@@ -626,16 +654,18 @@ def _http_error(status: int, *, retry_after: str | None = None) -> requests.HTTP
     return requests.HTTPError(f"HTTP {status}", response=response)
 
 
-def test_delete_files_checkpoints_each_successful_batch(ctx, capsys):
+def test_delete_files_checkpoints_each_successful_batch(ctx, monkeypatch, capsys):
     """The `delete_files` function must checkpoint confirmed batches while
     preserving unconfirmed IDs.
     """
     original = [str(i) for i in range(1, 206)]
     ctx.path.fileids_to_delete.write_text(json.dumps(original))
     calls = []
+    sleeps = []
 
-    class FakeAdmin:
-        def delete_files(self, fileids):
+    class FakeAdmin(_FakeDeleteAdmin):
+        def delete_files(self, fileids, defaults):
+            assert defaults is self.defaults
             calls.append(list(fileids))
             if len(calls) == 2:
                 raise _http_error(500)
@@ -645,7 +675,9 @@ def test_delete_files_checkpoints_each_successful_batch(ctx, capsys):
 
     ctx.admin_client = FakeAdmin()
     ctx.dry_run = False
+    ctx.config.admin_url_sleep = 2.5
     ctx.args = models.CliArgs(mode="delete_files", apply=True, yes=True)
+    monkeypatch.setattr(cleanup.time, "sleep", sleeps.append)
 
     with pytest.raises(SystemExit) as error:
         cleanup.delete_files(ctx)
@@ -653,6 +685,7 @@ def test_delete_files_checkpoints_each_successful_batch(ctx, capsys):
     assert error.value.code == 1
     assert calls[0] == original[:100]
     assert calls[1] == original[100:200]
+    assert sleeps == [2.5, 2.5]
     assert json.loads(ctx.path.fileids_to_delete.read_text()) == original[100:]
     assert "105 remaining; checkpointed" in capsys.readouterr().out
 
@@ -665,8 +698,8 @@ def test_delete_files_retries_429_and_honors_retry_after(ctx, monkeypatch, capsy
     calls = []
     sleeps = []
 
-    class FakeAdmin:
-        def delete_files(self, fileids):
+    class FakeAdmin(_FakeDeleteAdmin):
+        def delete_files(self, fileids, defaults):
             calls.append(list(fileids))
             if len(calls) == 1:
                 raise _http_error(429, retry_after="7")
@@ -676,13 +709,14 @@ def test_delete_files_retries_429_and_honors_retry_after(ctx, monkeypatch, capsy
 
     ctx.admin_client = FakeAdmin()
     ctx.dry_run = False
+    ctx.config.admin_url_sleep = 2.5
     ctx.args = models.CliArgs(mode="delete_files", apply=True, yes=True)
     monkeypatch.setattr(cleanup.time, "sleep", sleeps.append)
 
     cleanup.delete_files(ctx)
 
     assert calls == [["1", "2", "3"], ["1", "2", "3"]]
-    assert sleeps == [7.0]
+    assert sleeps == [2.5, 7.0]
     assert json.loads(ctx.path.fileids_to_delete.read_text()) == []
     out = capsys.readouterr().out
     assert "HTTP 429 Too Many Requests" in out
@@ -697,8 +731,8 @@ def test_delete_files_interruption_preserves_checkpoint(ctx):
     ctx.path.fileids_to_delete.write_text(json.dumps(original))
     calls = []
 
-    class FakeAdmin:
-        def delete_files(self, fileids):
+    class FakeAdmin(_FakeDeleteAdmin):
+        def delete_files(self, fileids, defaults):
             calls.append(list(fileids))
             if len(calls) == 2:
                 raise KeyboardInterrupt
@@ -739,8 +773,8 @@ def test_delete_files_limit_checkpoints_only_requested_ids(ctx, capsys):
     ctx.path.fileids_to_delete.write_text(json.dumps(original))
     calls = []
 
-    class FakeAdmin:
-        def delete_files(self, fileids):
+    class FakeAdmin(_FakeDeleteAdmin):
+        def delete_files(self, fileids, defaults):
             calls.append(list(fileids))
             return clients.DeleteConfirmation(
                 message=f"{len(fileids)} files have been deleted.", count=len(fileids)
@@ -772,8 +806,8 @@ def test_delete_files_unconfirmed_response_does_not_checkpoint(ctx, capsys):
     original = ["1", "2", "3"]
     ctx.path.fileids_to_delete.write_text(json.dumps(original))
 
-    class FakeAdmin:
-        def delete_files(self, fileids):
+    class FakeAdmin(_FakeDeleteAdmin):
+        def delete_files(self, fileids, defaults):
             raise RuntimeError("Website Toolbox did not confirm deletion")
 
     ctx.admin_client = FakeAdmin()
@@ -795,8 +829,8 @@ def test_delete_files_partial_confirmation_preserves_ambiguous_batch(ctx, capsys
     original = [str(i) for i in range(1, 106)]
     ctx.path.fileids_to_delete.write_text(json.dumps(original))
 
-    class FakeAdmin:
-        def delete_files(self, fileids):
+    class FakeAdmin(_FakeDeleteAdmin):
+        def delete_files(self, fileids, defaults):
             return clients.DeleteConfirmation(message="93 files have been deleted.", count=93)
 
     ctx.admin_client = FakeAdmin()
@@ -829,8 +863,8 @@ def test_delete_files_success_removes_stale_unresolved_report(ctx):
     ctx.path.fileids_to_delete.write_text(json.dumps(["1", "2"]))
     ctx.path.delete_unresolved.write_text("stale")
 
-    class FakeAdmin:
-        def delete_files(self, fileids):
+    class FakeAdmin(_FakeDeleteAdmin):
+        def delete_files(self, fileids, defaults):
             return clients.DeleteConfirmation(message="2 files have been deleted.", count=2)
 
     ctx.admin_client = FakeAdmin()

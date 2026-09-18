@@ -32,7 +32,10 @@ def test_config_loads_sources_with_precedence_and_typed_values(monkeypatch):
                 "SKIP_DAYS": "30",
                 "TEST_POST_ID": "",
                 "DRY_RUN": "true",
+                "API_URL_SLEEP": "1.5",
                 "ADMIN_URL_SLEEP": "3",
+                "OLD_URL_SLEEP": "0.1",
+                "NEW_URL_SLEEP": "0.2",
                 "API_USERNAME": "from-env-file",
             }
         if filename == ".env.secrets":
@@ -53,7 +56,10 @@ def test_config_loads_sources_with_precedence_and_typed_values(monkeypatch):
     assert cfg.api_key == "secret-key"
     assert cfg.skip_days == 7
     assert cfg.dry_run is False
+    assert cfg.api_url_sleep == 1.5
     assert cfg.admin_url_sleep == 3
+    assert cfg.old_url_sleep == 0.1
+    assert cfg.new_url_sleep == 0.2
     assert cfg.export_dir == Path("csv")
     assert cfg.old_url_thumb is None
     assert cfg.test_post_id is None
@@ -88,7 +94,10 @@ def test_validate_config_requires_complete_migration_config(tmp_path, config_for
         ({"old_url": "https://old.example.com"}, "OLD_URL must end with '/':"),
         ({"new_url": "not-a-url"}, r"NEW_URL must be an absolute http\(s\) URL"),
         ({"skip_days": -1}, "SKIP_DAYS must be greater than or equal to 0"),
+        ({"api_url_sleep": -1}, "API_URL_SLEEP must be greater than or equal to 0"),
         ({"admin_url_sleep": -1}, "ADMIN_URL_SLEEP must be greater than or equal to 0"),
+        ({"old_url_sleep": -1}, "OLD_URL_SLEEP must be greater than or equal to 0"),
+        ({"new_url_sleep": -1}, "NEW_URL_SLEEP must be greater than or equal to 0"),
     ],
 )
 def test_validate_config_rejects_invalid_values(tmp_path, config_for, changes, message):
