@@ -17,7 +17,7 @@ def test_mode_download_files_auth_gate(ctx, capsys):
     assert "API is inaccessible" in out
 
 
-def test_mode_download_files_happy_path_calls_pipeline(ctx, monkeypatch):
+def test_mode_download_files_happy_path_calls_pipeline(ctx, mp):
     """The `mode_download_files` function must run the download pipeline in
     the expected order when the API is available.
     """
@@ -28,28 +28,26 @@ def test_mode_download_files_happy_path_calls_pipeline(ctx, monkeypatch):
 
     ctx.api_client = FakeApi()
     calls = []
-    monkeypatch.setattr(commands.io, "log", lambda args: calls.append("log"))
-    monkeypatch.setattr(
+    mp.setattr(commands.io, "log", lambda args: calls.append("log"))
+    mp.setattr(
         commands,
         "posts_from_export",
         lambda args: calls.append("export") or {"1": {"date": "0", "image_urls": []}},
     )
-    monkeypatch.setattr(
-        commands, "posts_from_api", lambda args, posts: calls.append("api") or posts
-    )
-    monkeypatch.setattr(
+    mp.setattr(commands, "posts_from_api", lambda args, posts: calls.append("api") or posts)
+    mp.setattr(
         commands,
         "files_from_posts",
         lambda args, posts, *, toolbox_files: (
             calls.append(("files_from_posts", toolbox_files)) or {}
         ),
     )
-    monkeypatch.setattr(
+    mp.setattr(
         commands,
         "download_files",
         lambda args, files: calls.append("download_files") or files,
     )
-    monkeypatch.setattr(commands, "summarize", lambda args, files: calls.append("summarize"))
+    mp.setattr(commands, "summarize", lambda args, files: calls.append("summarize"))
     commands.mode_download_files(ctx)
 
     assert calls == [
@@ -62,7 +60,7 @@ def test_mode_download_files_happy_path_calls_pipeline(ctx, monkeypatch):
     ]
 
 
-def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ctx, monkeypatch):
+def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ctx, mp):
     """The `mode_download_links` function must request link-only discovery
     without mutating shared configuration.
     """
@@ -76,7 +74,7 @@ def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ct
     skip_days = ctx.config.skip_days
     called = []
 
-    monkeypatch.setattr(commands.io, "log", lambda context: called.append("log"))
+    mp.setattr(commands.io, "log", lambda context: called.append("log"))
 
     def fake_export(context, *, include_thumbnails=True):
         called.append(("export", include_thumbnails))
@@ -90,10 +88,10 @@ def test_mode_download_links_uses_link_only_discovery_without_mutating_config(ct
         called.append(("files_from_posts", toolbox_files, include_thumbnails, skip_days))
         return {}
 
-    monkeypatch.setattr(commands, "posts_from_export", fake_export)
-    monkeypatch.setattr(commands, "posts_from_api", fake_api)
-    monkeypatch.setattr(commands, "files_from_posts", fake_files)
-    monkeypatch.setattr(commands, "summarize", lambda context, files: called.append("summarize"))
+    mp.setattr(commands, "posts_from_export", fake_export)
+    mp.setattr(commands, "posts_from_api", fake_api)
+    mp.setattr(commands, "files_from_posts", fake_files)
+    mp.setattr(commands, "summarize", lambda context, files: called.append("summarize"))
 
     commands.mode_download_links(ctx)
 
@@ -132,7 +130,7 @@ def test_mode_update_posts_and_delete_files_auth_gate(ctx, capsys):
     assert "Admin UI is inaccessible" in capsys.readouterr().out
 
 
-def test_mode_update_legacy_links_calls_expected(ctx, monkeypatch):
+def test_mode_update_legacy_links_calls_expected(ctx, mp):
     """The `mode_update_legacy_links` function must run the legacy-link update
     pipeline without mutating shared configuration.
     """
@@ -146,22 +144,22 @@ def test_mode_update_legacy_links_calls_expected(ctx, monkeypatch):
     old_url_thumb = ctx.config.old_url_thumb
     calls = []
 
-    monkeypatch.setattr(
+    mp.setattr(
         commands,
         "posts_from_export",
         lambda context, legacy=False: calls.append(("export", legacy)) or {},
     )
-    monkeypatch.setattr(
+    mp.setattr(
         commands,
         "files_from_export",
         lambda context, posts: calls.append("files_from_export") or {},
     )
-    monkeypatch.setattr(
+    mp.setattr(
         commands,
         "summarize",
         lambda context, files, legacy=False: calls.append(("summarize", legacy)),
     )
-    monkeypatch.setattr(
+    mp.setattr(
         commands,
         "update_posts",
         lambda context, legacy=False: calls.append(("update_posts", legacy)),
@@ -179,13 +177,13 @@ def test_mode_update_legacy_links_calls_expected(ctx, monkeypatch):
     ]
 
 
-def test_mode_archive_downloads_logs_and_archives(ctx, monkeypatch):
+def test_mode_archive_downloads_logs_and_archives(ctx, mp):
     """The `mode_archive_downloads` function must log the run and invoke local
     upload confirmation.
     """
     calls = []
-    monkeypatch.setattr(commands.io, "log", lambda context: calls.append("log"))
-    monkeypatch.setattr(commands, "archive_downloads", lambda context: calls.append("archive"))
+    mp.setattr(commands.io, "log", lambda context: calls.append("log"))
+    mp.setattr(commands, "archive_downloads", lambda context: calls.append("archive"))
 
     commands.mode_archive_downloads(ctx)
 

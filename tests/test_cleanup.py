@@ -7,14 +7,14 @@ from tests.helpers import write_csv
 from toolbox import cleanup, clients, models
 
 
-def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch, capsys):
+def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, mp, capsys):
     """The `archive_downloads` function must archive confirmed files and
     report destination failures.
     """
     ctx.dry_run = False
     ctx.config.new_url_sleep = 0.4
     events = []
-    monkeypatch.setattr(cleanup.time, "sleep", lambda delay: events.append(("sleep", delay)))
+    mp.setattr(cleanup.time, "sleep", lambda delay: events.append(("sleep", delay)))
     progress = []
 
     class RecordingAliveBar:
@@ -31,7 +31,7 @@ def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch,
         def __exit__(self, _exc_type, _exc, _tb):
             return False
 
-    monkeypatch.setattr(cleanup, "alive_bar", RecordingAliveBar)
+    mp.setattr(cleanup, "alive_bar", RecordingAliveBar)
     new_dir = ctx.path.download_dir / "_new_"
     good = new_dir / "123" / "Brother 160 Cambridge.jpg"
     thumb = new_dir / "thumb" / "123" / "Brother 160 Cambridge.jpg"
@@ -85,12 +85,12 @@ def test_archive_downloads_moves_confirmed_and_lists_remaining(ctx, monkeypatch,
     assert out.rstrip().splitlines()[-1].startswith("Archive downloads: 2 archived; 1 remaining")
 
 
-def test_archive_downloads_reports_request_exceptions_and_continues(ctx, monkeypatch, capsys):
+def test_archive_downloads_reports_request_exceptions_and_continues(ctx, mp, capsys):
     """The `archive_downloads` function must report request failures and
     continue checking later files.
     """
     ctx.dry_run = False
-    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    mp.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     new_dir = ctx.path.download_dir / "_new_"
     timed_out = new_dir / "123" / "timeout.jpg"
     good = new_dir / "456" / "good.jpg"
@@ -114,12 +114,12 @@ def test_archive_downloads_reports_request_exceptions_and_continues(ctx, monkeyp
     assert "2 checked; 1 found; 1 failed; 0 unchecked" in out
 
 
-def test_archive_downloads_ctrl_c_reports_partial_results_and_exits_130(ctx, monkeypatch, capsys):
+def test_archive_downloads_ctrl_c_reports_partial_results_and_exits_130(ctx, mp, capsys):
     """The `archive_downloads` function must report partial results, exit 130,
     and suppress a traceback when interrupted.
     """
     ctx.dry_run = False
-    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    mp.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     new_dir = ctx.path.download_dir / "_new_"
     first = new_dir / "123" / "missing.jpg"
     second = new_dir / "456" / "unchecked.jpg"
@@ -157,12 +157,12 @@ def test_archive_downloads_ctrl_c_reports_partial_results_and_exits_130(ctx, mon
     assert capsys.readouterr().err == ""
 
 
-def test_archive_downloads_handles_existing_uploaded_files(ctx, monkeypatch, capsys):
+def test_archive_downloads_handles_existing_uploaded_files(ctx, mp, capsys):
     """The `archive_downloads` function must consume identical archived duplicates
     and preserve conflicts.
     """
     ctx.dry_run = False
-    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    mp.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     new_dir = ctx.path.download_dir / "_new_"
     uploaded_dir = ctx.path.download_dir / "_uploaded_"
 
@@ -191,11 +191,11 @@ def test_archive_downloads_handles_existing_uploaded_files(ctx, monkeypatch, cap
     assert "Conflicts with existing files in _uploaded_" in out
 
 
-def test_archive_downloads_dry_run_does_not_change_local_files(ctx, monkeypatch, capsys):
+def test_archive_downloads_dry_run_does_not_change_local_files(ctx, mp, capsys):
     """The `archive_downloads` function must not modify local files or metadata
     during a dry run.
     """
-    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    mp.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     new_dir = ctx.path.download_dir / "_new_"
     image = new_dir / "123" / "a.jpg"
     metadata = new_dir / "123" / ".DS_Store"
@@ -219,12 +219,12 @@ def test_archive_downloads_dry_run_does_not_change_local_files(ctx, monkeypatch,
     assert "1 would archive; 0 would remain" in out
 
 
-def test_archive_downloads_removes_ds_store_and_empty_directories(ctx, monkeypatch, capsys):
+def test_archive_downloads_removes_ds_store_and_empty_directories(ctx, mp, capsys):
     """The `archive_downloads` function must remove Finder metadata and
     prune emptied directories.
     """
     ctx.dry_run = False
-    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    mp.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     new_dir = ctx.path.download_dir / "_new_"
     image = new_dir / "123" / "nested" / "a.jpg"
     metadata = image.parent / ".DS_Store"
@@ -251,7 +251,7 @@ def test_archive_downloads_removes_ds_store_and_empty_directories(ctx, monkeypat
     assert "1 archived; 0 remaining" in out
 
 
-def test_check_new_urls_skips_skipped_files_and_uses_local_file_url(ctx, tmp_path, monkeypatch):
+def test_check_new_urls_skips_skipped_files_and_uses_local_file_url(ctx, tmp_path):
     """The `check_new_urls` function must ignore skipped files and check
     local destinations via file:// URLs.
     """
@@ -290,13 +290,13 @@ def test_check_new_urls_skips_skipped_files_and_uses_local_file_url(ctx, tmp_pat
     assert cleanup.check_new_urls(ctx, files) is True
 
 
-def test_check_new_urls_trusts_uploaded_archive_and_falls_back_to_remote(ctx, monkeypatch):
+def test_check_new_urls_trusts_uploaded_archive_and_falls_back_to_remote(ctx, mp):
     """The `check_new_urls` function must trust archived files and check
     unarchived destination URLs.
     """
     ctx.config.new_url_sleep = 0.6
     events = []
-    monkeypatch.setattr(cleanup.time, "sleep", lambda delay: events.append(("sleep", delay)))
+    mp.setattr(cleanup.time, "sleep", lambda delay: events.append(("sleep", delay)))
     uploaded = ctx.path.download_dir / "_uploaded_" / "123" / "a.jpg"
     uploaded.parent.mkdir(parents=True)
     uploaded.write_bytes(b"confirmed")
@@ -329,11 +329,11 @@ def test_check_new_urls_trusts_uploaded_archive_and_falls_back_to_remote(ctx, mo
     assert events == [("sleep", 0.6), ("check", checked[0])]
 
 
-def test_check_new_urls_uses_uploaded_thumbnail_archive_path(ctx, monkeypatch):
+def test_check_new_urls_uses_uploaded_thumbnail_archive_path(ctx, mp):
     """The `check_new_urls` function must recognize thumbnail confirmations
     under the uploaded archive.
     """
-    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    mp.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     url = "https://old.example.com/123/a.jpg"
     url_thumb = "https://old.example.com/thumb/123/a.jpg"
     uploaded = ctx.path.download_dir / "_uploaded_" / "thumb" / "123" / "a.jpg"
@@ -383,11 +383,11 @@ def test_check_new_urls_falls_back_to_full_image_when_thumbnail_failed(ctx):
     assert seen == ["https://new.example.com/123/a.jpg"]
 
 
-def test_check_new_urls_uses_thumbnail_when_full_image_failed(ctx, monkeypatch):
+def test_check_new_urls_uses_thumbnail_when_full_image_failed(ctx, mp):
     """The `check_new_urls` function must verify the thumbnail destination when full-image
     migration fails.
     """
-    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    mp.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     full = "https://old.example.com/123/a.jpg"
     thumb = "https://old.example.com/thumb/123/a.jpg"
     write_csv(
@@ -411,11 +411,11 @@ def test_check_new_urls_uses_thumbnail_when_full_image_failed(ctx, monkeypatch):
     assert checked == ["https://new.example.com/thumb/123/a.jpg"]
 
 
-def test_check_new_urls_skips_unrecoverable_source_pair(ctx, monkeypatch):
+def test_check_new_urls_skips_unrecoverable_source_pair(ctx, mp):
     """The `check_new_urls` function must skip destination checks when both
     source variants are unrecoverable.
     """
-    monkeypatch.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
+    mp.setattr(cleanup.time, "sleep", lambda *_args, **_kwargs: None)
     full = "https://old.example.com/123/a.jpg"
     thumb = "https://old.example.com/thumb/123/a.jpg"
     write_csv(
@@ -654,7 +654,7 @@ def _http_error(status: int, *, retry_after: str | None = None) -> requests.HTTP
     return requests.HTTPError(f"HTTP {status}", response=response)
 
 
-def test_delete_files_checkpoints_each_successful_batch(ctx, monkeypatch, capsys):
+def test_delete_files_checkpoints_each_successful_batch(ctx, mp, capsys):
     """The `delete_files` function must checkpoint confirmed batches while
     preserving unconfirmed IDs.
     """
@@ -677,7 +677,7 @@ def test_delete_files_checkpoints_each_successful_batch(ctx, monkeypatch, capsys
     ctx.dry_run = False
     ctx.config.admin_url_sleep = 2.5
     ctx.args = models.CliArgs(mode="delete_files", apply=True, yes=True)
-    monkeypatch.setattr(cleanup.time, "sleep", sleeps.append)
+    mp.setattr(cleanup.time, "sleep", sleeps.append)
 
     with pytest.raises(SystemExit) as error:
         cleanup.delete_files(ctx)
@@ -690,7 +690,7 @@ def test_delete_files_checkpoints_each_successful_batch(ctx, monkeypatch, capsys
     assert "105 remaining; checkpointed" in capsys.readouterr().out
 
 
-def test_delete_files_retries_429_and_honors_retry_after(ctx, monkeypatch, capsys):
+def test_delete_files_retries_429_and_honors_retry_after(ctx, mp, capsys):
     """The `delete_files` function must retry HTTP 429 responses and honor
     Retry-After
     ."""
@@ -711,7 +711,7 @@ def test_delete_files_retries_429_and_honors_retry_after(ctx, monkeypatch, capsy
     ctx.dry_run = False
     ctx.config.admin_url_sleep = 2.5
     ctx.args = models.CliArgs(mode="delete_files", apply=True, yes=True)
-    monkeypatch.setattr(cleanup.time, "sleep", sleeps.append)
+    mp.setattr(cleanup.time, "sleep", sleeps.append)
 
     cleanup.delete_files(ctx)
 

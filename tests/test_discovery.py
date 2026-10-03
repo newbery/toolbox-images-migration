@@ -72,7 +72,7 @@ def test_posts_from_api_adds_new_posts_and_stops_at_existing_pid(ctx):
     assert client.requested == [1, 2]
 
 
-def test_posts_from_api_paces_before_each_page_request(ctx, monkeypatch):
+def test_posts_from_api_paces_before_each_page_request(ctx, mp):
     """The `posts_from_api` function must pace the repeated API page requests."""
     events = []
 
@@ -83,7 +83,7 @@ def test_posts_from_api_paces_before_each_page_request(ctx, monkeypatch):
 
     ctx.api_client = FakeClient()
     ctx.config.api_url_sleep = 1.25
-    monkeypatch.setattr(discovery.time, "sleep", lambda delay: events.append(("sleep", delay)))
+    mp.setattr(discovery.time, "sleep", lambda delay: events.append(("sleep", delay)))
 
     discovery.posts_from_api(ctx, {})
 

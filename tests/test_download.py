@@ -4,7 +4,7 @@ from tests.helpers import write_csv
 from toolbox import download, io, models
 
 
-def test_download_files_updates_results_and_preserves_skipped_files(ctx, monkeypatch, capsys):
+def test_download_files_updates_results_and_preserves_skipped_files(ctx, capsys):
     """The `download_files` function must record successful and failed downloads
     and preserve files already marked as skipped.
     """
@@ -75,7 +75,7 @@ def test_download_files_uses_uploaded_archive_as_cache(ctx):
     assert out["123"].result is models.FileResult.downloaded
 
 
-def test_download_files_paces_network_downloads_but_not_cached_files(ctx, monkeypatch):
+def test_download_files_paces_network_downloads_but_not_cached_files(ctx, mp):
     """The `download_files` function must pace actual source requests without
     delaying files satisfied from the local upload archive.
     """
@@ -92,7 +92,7 @@ def test_download_files_paces_network_downloads_but_not_cached_files(ctx, monkey
 
     ctx.downloader = FakeDownloader()
     ctx.config.old_url_sleep = 0.75
-    monkeypatch.setattr(download.time, "sleep", lambda delay: events.append(("sleep", delay)))
+    mp.setattr(download.time, "sleep", lambda delay: events.append(("sleep", delay)))
     files = {
         "123": models.ForumFile(
             fileid="123",

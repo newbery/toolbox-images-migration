@@ -13,7 +13,7 @@ def test_config_from_mapping_rejects_missing_required_values():
         context.Config.from_mapping({})
 
 
-def test_config_loads_sources_with_precedence_and_typed_values(monkeypatch):
+def test_config_loads_sources_with_precedence_and_typed_values(mp):
     """The `config` function must merge dotenv and environment sources with
     the expected precedence and typed values.
     """
@@ -46,10 +46,10 @@ def test_config_loads_sources_with_precedence_and_typed_values(monkeypatch):
             }
         return {}
 
-    monkeypatch.setattr(context, "dotenv_values", fake_dotenv_values)
-    monkeypatch.setenv("TOOLBOX_SKIP_DAYS", "7")
-    monkeypatch.setenv("TOOLBOX_DRY_RUN", "false")
-    monkeypatch.setenv("OTHER", "x")
+    mp.setattr(context, "dotenv_values", fake_dotenv_values)
+    mp.setenv("TOOLBOX_SKIP_DAYS", "7")
+    mp.setenv("TOOLBOX_DRY_RUN", "false")
+    mp.setenv("OTHER", "x")
 
     cfg = context.config()
     assert cfg.api_username == "secret-user"
@@ -135,14 +135,12 @@ def test_paths_builds_expected_derived_paths(tmp_path, config_for):
     assert paths.legacy_updates_dry_run.name == "legacy_updates.dry_run.csv"
 
 
-def test_init_context_builds_context_using_configured_apply_mode(
-    tmp_path, monkeypatch, capsys, config_for
-):
+def test_init_context_builds_context_using_configured_apply_mode(tmp_path, mp, capsys, config_for):
     """The `init_context` function must build the runtime context and use
     configured apply mode by default.
     """
     cfg = config_for(tmp_path, dry_run=False)
-    monkeypatch.setattr(context, "config", lambda: cfg)
+    mp.setattr(context, "config", lambda: cfg)
 
     args = models.CliArgs(mode="download_files")
     ctx = context.init_context(args)
@@ -154,14 +152,12 @@ def test_init_context_builds_context_using_configured_apply_mode(
     assert capsys.readouterr().out == ""
 
 
-def test_init_context_uses_configured_dry_run_and_prints_banner(
-    tmp_path, monkeypatch, capsys, config_for
-):
+def test_init_context_uses_configured_dry_run_and_prints_banner(tmp_path, mp, capsys, config_for):
     """The `init_context` function must use configured dry-run mode and print
     the dry-run banner.
     """
     cfg = config_for(tmp_path, dry_run=True)
-    monkeypatch.setattr(context, "config", lambda: cfg)
+    mp.setattr(context, "config", lambda: cfg)
 
     ctx = context.init_context(models.CliArgs(mode="download_files"))
 
@@ -170,26 +166,26 @@ def test_init_context_uses_configured_dry_run_and_prints_banner(
     assert "---- Dry Run (no remote changes) ----" in out
 
 
-def test_init_context_cli_apply_overrides_configured_dry_run(tmp_path, monkeypatch, config_for):
+def test_init_context_cli_apply_overrides_configured_dry_run(tmp_path, mp, config_for):
     """The `init_context` function must let --apply override configured dry-run
     mode.
     """
     cfg = config_for(tmp_path, dry_run=True)
-    monkeypatch.setattr(context, "config", lambda: cfg)
+    mp.setattr(context, "config", lambda: cfg)
 
     ctx = context.init_context(models.CliArgs(mode="download_files", apply=True))
 
     assert ctx.dry_run is False
 
 
-def test_init_context_allows_local_new_url_in_dry_run(tmp_path, monkeypatch, config_for):
+def test_init_context_allows_local_new_url_in_dry_run(tmp_path, mp, config_for):
     """The `init_context` function must allow an existing local NEW_URL
     directory in dry-run mode.
     """
     new_dir = tmp_path / "new"
     new_dir.mkdir()
     cfg = config_for(tmp_path, new_url=str(new_dir), dry_run=True)
-    monkeypatch.setattr(context, "config", lambda: cfg)
+    mp.setattr(context, "config", lambda: cfg)
 
     ctx = context.init_context(models.CliArgs(mode="download_files"))
 
@@ -197,20 +193,20 @@ def test_init_context_allows_local_new_url_in_dry_run(tmp_path, monkeypatch, con
     assert ctx.dry_run is True
 
 
-def test_init_context_rejects_local_new_url_in_apply_mode(tmp_path, monkeypatch, config_for):
+def test_init_context_rejects_local_new_url_in_apply_mode(tmp_path, mp, config_for):
     """The `init_context` function must reject a local NEW_URL directory in
     apply mode.
     """
     new_dir = tmp_path / "new"
     new_dir.mkdir()
     cfg = config_for(tmp_path, new_url=str(new_dir), dry_run=True)
-    monkeypatch.setattr(context, "config", lambda: cfg)
+    mp.setattr(context, "config", lambda: cfg)
 
     with pytest.raises(ValueError, match=r"NEW_URL must be an absolute http\(s\) URL"):
         context.init_context(models.CliArgs(mode="download_files", apply=True))
 
 
-def test_init_clients_configures_session_clients_and_url_helpers(ctx, monkeypatch):
+def test_init_clients_configures_session_clients_and_url_helpers(ctx, mp):
     """The `init_clients` function must configure the session, attach
     service clients, and install URL status helpers.
     """
@@ -243,17 +239,13 @@ def test_init_clients_configures_session_clients_and_url_helpers(ctx, monkeypatc
     class FakeAdapter:
         pass
 
-    monkeypatch.setattr(context, "FileAdapter", FakeAdapter)
+    mp.setattr(context, "FileAdapter", FakeAdapter)
 
     api_obj, admin_obj, dl_obj = object(), object(), object()
     created = {"api": None, "admin": None, "dl": None}
-    monkeypatch.setattr(
-        context, "APIClient", lambda ctx: created.__setitem__("api", ctx) or api_obj
-    )
-    monkeypatch.setattr(
-        context, "AdminClient", lambda ctx: created.__setitem__("admin", ctx) or admin_obj
-    )
-    monkeypatch.setattr(context, "Downloader", lambda ctx: created.__setitem__("dl", ctx) or dl_obj)
+    mp.setattr(context, "APIClient", lambda ctx: created.__setitem__("api", ctx) or api_obj)
+    mp.setattr(context, "AdminClient", lambda ctx: created.__setitem__("admin", ctx) or admin_obj)
+    mp.setattr(context, "Downloader", lambda ctx: created.__setitem__("dl", ctx) or dl_obj)
 
     sess = FakeSession()
     out = context.init_clients(ctx, session=sess)
@@ -283,7 +275,7 @@ def test_init_clients_configures_session_clients_and_url_helpers(ctx, monkeypatc
     assert all(call[3] is True for call in sess.get_calls)
 
 
-def test_init_clients_creates_session_when_not_provided(ctx, monkeypatch):
+def test_init_clients_creates_session_when_not_provided(ctx, mp):
     """The `init_clients` function must create and store a requests session
     when none is provided.
     """
@@ -308,11 +300,11 @@ def test_init_clients_creates_session_when_not_provided(ctx, monkeypatch):
 
             return R()
 
-    monkeypatch.setattr(context.requests, "Session", FakeSession)
-    monkeypatch.setattr(context, "FileAdapter", lambda: object())
-    monkeypatch.setattr(context, "APIClient", lambda ctx: object())
-    monkeypatch.setattr(context, "AdminClient", lambda ctx: object())
-    monkeypatch.setattr(context, "Downloader", lambda ctx: object())
+    mp.setattr(context.requests, "Session", FakeSession)
+    mp.setattr(context, "FileAdapter", lambda: object())
+    mp.setattr(context, "APIClient", lambda ctx: object())
+    mp.setattr(context, "AdminClient", lambda ctx: object())
+    mp.setattr(context, "Downloader", lambda ctx: object())
 
     context.init_clients(ctx, session=None)
 

@@ -5,27 +5,27 @@ import pytest
 from toolbox import cli, models
 
 
-def test_parse_args_accepts_valid_mode(monkeypatch):
+def test_parse_args_accepts_valid_mode(mp):
     """The `parse_args` function must accept a valid mode and store it in
     the parsed arguments.
     """
-    monkeypatch.setattr(cli, "modes", lambda: {"download_files": lambda _ctx: None})
+    mp.setattr(cli, "modes", lambda: {"download_files": lambda _ctx: None})
 
     args = cli.parse_args(["download_files"])
     assert args.mode == "download_files"
 
 
-def test_parse_args_rejects_unknown_mode(monkeypatch):
+def test_parse_args_rejects_unknown_mode(mp):
     """The `parse_args` function must reject a mode that is not exposed by
     the CLI.
     """
-    monkeypatch.setattr(cli, "modes", lambda: {"download_files": lambda _ctx: None})
+    mp.setattr(cli, "modes", lambda: {"download_files": lambda _ctx: None})
 
     with pytest.raises(SystemExit):
         cli.parse_args(["nope"])
 
 
-def test_main_parses_initializes_and_dispatches_selected_mode(monkeypatch):
+def test_main_parses_initializes_and_dispatches_selected_mode(mp):
     """The `main` function must parse arguments, initialize the context and
     clients, and dispatch the selected mode exactly once.
     """
@@ -63,10 +63,10 @@ def test_main_parses_initializes_and_dispatches_selected_mode(monkeypatch):
         assert getattr(context, "inited", False) is True
         called["mode"] += 1
 
-    monkeypatch.setattr(cli, "parse_args", fake_parse)
-    monkeypatch.setattr(cli, "init_context", fake_init_context)
-    monkeypatch.setattr(cli.requests, "Session", lambda: FakeSess())
-    monkeypatch.setattr(cli, "init_clients", fake_init_clients)
-    monkeypatch.setattr(cli, "modes", lambda: {"download_files": mode_fn})
+    mp.setattr(cli, "parse_args", fake_parse)
+    mp.setattr(cli, "init_context", fake_init_context)
+    mp.setattr(cli.requests, "Session", lambda: FakeSess())
+    mp.setattr(cli, "init_clients", fake_init_clients)
+    mp.setattr(cli, "modes", lambda: {"download_files": mode_fn})
     cli.main(["download_files"])
     assert called == {"parse": 1, "ctx": 1, "init": 1, "mode": 1}

@@ -261,7 +261,7 @@ def test_select_files_to_delete_blocks_kept_fileids_and_ignores_non_toolbox_file
     )
 
 
-def test_apply_update_plan_paces_each_api_update(ctx, tmp_path, monkeypatch):
+def test_apply_update_plan_paces_each_api_update(ctx, tmp_path, mp):
     """The `apply_update_plan` function must pace repeated API update requests."""
     plan = tmp_path / "plan.jsonl"
     plan.write_text(
@@ -280,7 +280,7 @@ def test_apply_update_plan_paces_each_api_update(ctx, tmp_path, monkeypatch):
     ctx.api_client = FakeClient()
     ctx.dry_run = False
     ctx.config.api_url_sleep = 0.8
-    monkeypatch.setattr(updates.time, "sleep", lambda delay: events.append(("sleep", delay)))
+    mp.setattr(updates.time, "sleep", lambda delay: events.append(("sleep", delay)))
 
     updates.apply_update_plan(context=ctx, plan_path=plan, updates_output_path=tmp_path / "out.csv")
 
@@ -292,7 +292,7 @@ def test_apply_update_plan_paces_each_api_update(ctx, tmp_path, monkeypatch):
     ]
 
 
-def test_update_posts_dry_run_writes_preview_and_delete_candidates(ctx, monkeypatch):
+def test_update_posts_dry_run_writes_preview_and_delete_candidates(ctx, mp):
     """The `update_posts` function must write dry-run previews and delete candidates
     without calling the API or modifying apply state.
     """
@@ -323,8 +323,8 @@ def test_update_posts_dry_run_writes_preview_and_delete_candidates(ctx, monkeypa
         ],
     )
 
-    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
+    mp.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
+    mp.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
 
     class FakeClient:
         def update_post(self, _pid, _message):
@@ -351,7 +351,7 @@ def test_update_posts_dry_run_writes_preview_and_delete_candidates(ctx, monkeypa
     assert json.loads(ctx.path.fileids_to_delete_dry_run.read_text()) == ["123"]
 
 
-def test_update_posts_dry_run_does_not_mutate_apply_state(ctx, monkeypatch):
+def test_update_posts_dry_run_does_not_mutate_apply_state(ctx, mp):
     """The `update_posts` function must leave the apply journal and delete
     handoff unchanged when a dry-run preflight fails.
     """
@@ -363,7 +363,7 @@ def test_update_posts_dry_run_does_not_mutate_apply_state(ctx, monkeypatch):
         ["fileid", "pids", "url", "url_thumb", "url_file", "new_url", "result"],
         [],
     )
-    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: False)
+    mp.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: False)
 
     updates.update_posts(ctx)
     to_delete = ctx.path.fileids_to_delete
@@ -398,14 +398,14 @@ def _set_apply_mode(ctx):
     ctx.args = models.CliArgs(mode="update_posts", apply=True, yes=True)
 
 
-def test_update_posts_apply_rerun_skips_identical_success(ctx, monkeypatch):
+def test_update_posts_apply_rerun_skips_identical_success(ctx, mp):
     """The `update_posts` function must reuse an identical successful journal
     entry and avoid a duplicate API update on rerun.
     """
     _set_apply_mode(ctx)
     _write_simple_update_inputs(ctx)
-    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
+    mp.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
+    mp.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
     calls = []
 
     class FakeClient:
@@ -424,14 +424,14 @@ def test_update_posts_apply_rerun_skips_identical_success(ctx, monkeypatch):
     assert json.loads(ctx.path.fileids_to_delete.read_text()) == ["101"]
 
 
-def test_update_posts_apply_reapplies_when_target_content_changes(ctx, monkeypatch):
+def test_update_posts_apply_reapplies_when_target_content_changes(ctx, mp):
     """The `update_posts` function must reapply a prior success when its
     rewritten target content changes.
     """
     _set_apply_mode(ctx)
     _write_simple_update_inputs(ctx)
-    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
+    mp.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
+    mp.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
     calls = []
 
     class FakeClient:
@@ -452,14 +452,14 @@ def test_update_posts_apply_reapplies_when_target_content_changes(ctx, monkeypat
     assert [row["result"] for row in rows] == ["success", "success"]
 
 
-def test_update_posts_apply_resumes_after_failure(ctx, monkeypatch):
+def test_update_posts_apply_resumes_after_failure(ctx, mp):
     """The `update_posts` function must preserve completed journal entries
     and resume only unfinished posts after an apply failure.
     """
     _set_apply_mode(ctx)
     _write_simple_update_inputs(ctx, pids=("1", "2"))
-    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
+    mp.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
+    mp.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: True)
     first_calls = []
 
     class InterruptingClient:
@@ -498,7 +498,7 @@ def test_update_posts_apply_resumes_after_failure(ctx, monkeypatch):
     assert json.loads(ctx.path.fileids_to_delete.read_text()) == ["101", "102"]
 
 
-def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(ctx, monkeypatch):
+def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(ctx, mp):
     """The `update_posts` function must leave the destructive delete handoff
     empty when final old-reference verification fails.
     """
@@ -519,8 +519,8 @@ def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(ctx, mon
         ["fileid", "pids", "url", "url_thumb", "url_file", "new_url", "result"],
         [["123", "{'1'}", url, "", "/file?id=123", "", downloaded]],
     )
-    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: False)
+    mp.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
+    mp.setattr(updates, "check_old_urls", lambda *_args, **_kwargs: False)
 
     class FakeClient:
         def update_post(self, _pid, _message):
@@ -535,9 +535,7 @@ def test_update_posts_keeps_delete_handoff_empty_when_final_check_fails(ctx, mon
     assert json.loads(to_delete.read_text()) == []
 
 
-def test_update_posts_legacy_mode_uses_separate_journal_and_preserves_delete_handoff(
-    ctx, monkeypatch
-):
+def test_update_posts_legacy_mode_uses_separate_journal_and_preserves_delete_handoff(ctx, mp):
     """The `update_posts` function in legacy mode must use a separate journal
     and preserve normal migration state.
     """
@@ -560,7 +558,7 @@ def test_update_posts_legacy_mode_uses_separate_journal_and_preserves_delete_han
         [["101", "{'1'}", "/file?id=101", "", "/file?id=101", url, result]],
     )
 
-    monkeypatch.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
+    mp.setattr(updates, "check_new_urls", lambda *_args, **_kwargs: True)
     calls = []
 
     class FakeClient:

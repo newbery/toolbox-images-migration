@@ -57,9 +57,7 @@ def test_linecount_reflects_file_changes(tmp_path):
     assert io.linecount(p) == 2
 
 
-def test_rotate_output_archive_archives_output_and_prunes_old_archives(
-    tmp_path, monkeypatch, config_for
-):
+def test_rotate_output_archive_archives_output_and_prunes_old_archives(tmp_path, mp, config_for):
     """The `rotate_output_archive` function must archive a non-empty output
     directory, recreate it, and prune older archives beyond the retention count.
     """
@@ -94,7 +92,7 @@ def test_rotate_output_archive_archives_output_and_prunes_old_archives(
         def now(cls, tz=None):
             return datetime(2020, 1, 2, 3, 4, 5, tzinfo=tz)
 
-    monkeypatch.setattr(io, "datetime", FixedDateTime)
+    mp.setattr(io, "datetime", FixedDateTime)
 
     # prune down to 2
     io.rotate_output_archive(ctx, count=2)
@@ -107,7 +105,7 @@ def test_rotate_output_archive_archives_output_and_prunes_old_archives(
     assert len(dirs) <= 3  # old pruned + new archive (timestamp) + maybe some remain
 
 
-def test_log_appends_timestamped_message(ctx, monkeypatch):
+def test_log_appends_timestamped_message(ctx, mp):
     """The `log` function must append a timestamped message to the run log."""
 
     class FixedDateTime:
@@ -115,7 +113,7 @@ def test_log_appends_timestamped_message(ctx, monkeypatch):
         def now(cls):
             return datetime(2020, 1, 2, 3, 4, 5)
 
-    monkeypatch.setattr(io, "datetime", FixedDateTime)
+    mp.setattr(io, "datetime", FixedDateTime)
     io.log(ctx, text="hello")
     txt = ctx.path.log.read_text()
     assert "hello" in txt
